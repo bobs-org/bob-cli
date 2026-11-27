@@ -313,16 +313,17 @@ Without `--force`:
   does not have is not deleted, and that leftover cannot certify an exact
   match.
 - Dirty stamp from a different canonical checkout or host: permit without
-  `--force` only from a verifiably clean checkout when one commit reachable
-  from its HEAD holds the stamped bundle byte for byte; the sync names that
-  proving commit. Otherwise refuse, even when HEADs match. Per-file matches
-  drawn from different commits never qualify, and a vault edited after the
-  deploy (digest mismatch) still refuses.
+  `--force` when one commit reachable from its HEAD holds the stamped bundle
+  byte for byte; the sync names that proving commit. Otherwise refuse, even
+  when HEADs match. Per-file matches drawn from different commits never
+  qualify, and a vault edited after the deploy (digest mismatch) still
+  refuses.
 - Dirty stamp from the same canonical checkout and host: permit iterative
   deploys only while the stamp still matches the vault and its HEAD is an
   ancestor of the incoming HEAD.
 - Clean stamp: permit when the stamped commit is a known ancestor of incoming
-  HEAD; otherwise refuse.
+  HEAD, or from a verifiably clean checkout when one commit reachable from its
+  HEAD holds the stamped bundle byte for byte; otherwise refuse.
 - Unknown, malformed, unsupported, pending, or digest-mismatched provenance:
   refuse changing assets. Exact equality may reconcile only from a verifiably
   clean complete incoming bundle.
@@ -349,10 +350,12 @@ checkout whose HEAD reaches a commit holding the stamped bundle byte for
 byte: the sync overwrites without `--force` and names that proving commit in
 table output and as `proving_commit` in JSON. Syncing the identical bytes
 still reconciles to the clean revision, and a later descendant can update
-normally. If the checkout that needs to recover also has its own uncommitted
-work, stash it, bring the checkout up to the landed ref, sync from the clean
-tree, then restore and redeploy the stashed changes. If no single commit holds
-the stamped bundle, review the diff and pass `--force` explicitly.
+normally. A checkout with its own uncommitted work can still recover a dirty
+deploy directly once the deployed bundle has landed; recovering a clean
+non-ancestor deploy still needs a clean tree, so stash it, bring the checkout
+up to the landed ref, sync from the clean tree, then restore and redeploy the
+stashed changes. If no single commit holds the stamped bundle, review the diff
+and pass `--force` explicitly.
 
 A protection refusal names the plugin and the earlier deployment (including
 the deploying agent when recorded), explains the cause, and gives the

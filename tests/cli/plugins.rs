@@ -2403,3 +2403,103 @@ fn plugins_sync_clean_refusal_names_landed_revision() {
         format_output(&refused)
     );
 }
+
+#[test]
+fn plugins_sync_clean_unknown_head_permits_via_proof() {
+    let temp = TempDir::new("bob-cli-plugins-guard-clean-proof");
+    let sync_config = write_sync_config(temp.path(), &["alpha"]);
+    let (checkout_a, checkout_b, vault, backups) =
+        init_bare_guard_fixture(&temp);
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// new\n");
+    git_in(&checkout_a, ["add", "plugins/alpha/main.js"]);
+    git_in(&checkout_a, ["commit", "-q", "-m", "new revision"]);
+    let clean = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_a)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .env_remove("SASE_AGENT_ID")
+        .env("BOB_CONFIG_FILE", &sync_config)
+        .output()
+        .expect("clean deploy from checkout A");
+    assert_success(&clean);
+    git_in(&checkout_a, ["push", "-q", "origin", "HEAD"]);
+    let proving_sha = rev_parse_head(&checkout_a);
+
+    // Simulate a rebased-away clean revision: the deployed bytes stay in
+    // history, but the stamped head names an object no checkout holds.
+    let stamp = vault.join(".obsidian/plugins/alpha/.bob-deploy.json");
+    let body = fs::read_to_string(&stamp).expect("read stamp");
+    let mut value: serde_json::Value =
+        serde_json::from_str(&body).expect("parse stamp");
+    value["source_head"] = serde_json::Value::String("f".repeat(40));
+    fs::write(&stamp, serde_json::to_string_pretty(&value).unwrap())
+        .expect("rewrite stamp head");
+
+    git_in(&checkout_b, ["fetch", "-q", "origin"]);
+    git_in(&checkout_b, ["merge", "-q", "--ff-only", "@{upstream}"]);
+    write_file(&checkout_b.join("plugins/alpha/main.js"), "// later\n");
+    git_in(&checkout_b, ["add", "plugins/alpha/main.js"]);
+    git_in(&checkout_b, ["commit", "-q", "-m", "later update"]);
+
+    let json_out = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-d")
+        .arg("-f")
+        .arg("json")
+        .arg("-r")
+        .arg(&checkout_b)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .env_remove("SASE_AGENT_ID")
+        .env("BOB_CONFIG_FILE", &sync_config)
+        .output()
+        .expect("proof dry-run json");
+    assert_success(&json_out);
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout(&json_out)).expect("parse json");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["plugins"][0]["proving_commit"], proving_sha.as_str());
+
+    let landed = bob_command()
+        .arg("plugins")
+        .arg("sync")
+        .arg("-p")
+        .arg("alpha")
+        .arg("-n")
+        .arg("-r")
+        .arg(&checkout_b)
+        .arg("-b")
+        .arg(&vault)
+        .arg("-B")
+        .arg(&backups)
+        .env_remove("SASE_AGENT_ID")
+        .env("BOB_CONFIG_FILE", &sync_config)
+        .output()
+        .expect("proof sync from clean checkout");
+    assert_success(&landed);
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .expect("vault after proof"),
+        "// later\n"
+    );
+    let out = stdout(&landed);
+    assert!(
+        out.contains("inclusion proof") && out.contains(&proving_sha[..7]),
+        "sync output must name the proving commit:\n{}",
+        format_output(&landed)
+    );
+}

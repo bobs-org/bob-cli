@@ -1135,6 +1135,204 @@ fn mixed_bundle_from_two_commits_refuses() {
 }
 
 #[test]
+fn clean_stamp_with_unknown_head_permits_via_proof() {
+    let temp = TempDir::new("bob-cli-plugins-guard-clean-proof");
+    let seed = temp.path().join("seed");
+    write_plugin(&seed, "alpha", "1.0.0", "Alpha", "base");
+    git_init_commit(&seed);
+
+    let checkout_a = temp.path().join("a");
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&seed), path_str(&checkout_a)],
+    );
+    git_config_identity(&checkout_a);
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// clean-a\n");
+    run_git(&checkout_a, &["add", "plugins/alpha/main.js"]);
+    run_git(&checkout_a, &["commit", "-q", "-m", "clean-a"]);
+    let vault = temp.path().join("vault");
+    write_stamp_ignore(&vault);
+    let (opts_a, _guard) = options(&checkout_a, &vault);
+    assert!(sync_plugins(&opts_a).issues.is_empty());
+
+    // Simulate a rebased-away clean revision: the deployed bytes stay in
+    // history, but the stamped head names an object no checkout holds.
+    let stamp_file = stamp_path(&vault, "alpha");
+    let mut stamp: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&stamp_file).unwrap())
+            .unwrap();
+    stamp["source_head"] = serde_json::Value::String(
+        "ffffffffffffffffffffffffffffffffffffffff".to_string(),
+    );
+    write_file(&stamp_file, &serde_json::to_string_pretty(&stamp).unwrap());
+
+    // A clean checkout whose HEAD reaches the proving commit moves on.
+    let checkout_b = temp.path().join("b");
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&checkout_a), path_str(&checkout_b)],
+    );
+    git_config_identity(&checkout_b);
+    write_file(&checkout_b.join("plugins/alpha/main.js"), "// later\n");
+    run_git(&checkout_b, &["add", "plugins/alpha/main.js"]);
+    run_git(&checkout_b, &["commit", "-q", "-m", "later update"]);
+    let (opts_b, _guard_b) = options(&checkout_b, &vault);
+    let landed = sync_plugins(&opts_b);
+    assert!(landed.issues.is_empty(), "{:?}", landed.issues);
+    let proving = landed.plugins[0].proving_commit.clone().expect("proof");
+    assert_eq!(proving, git_head_sha(&checkout_b, "HEAD~1"));
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .unwrap(),
+        "// later\n",
+        "proof must overwrite the clean unknown-head stamp without --force"
+    );
+}
+
+#[test]
+fn clean_stamp_with_unknown_head_and_no_proof_refuses() {
+    let temp = TempDir::new("bob-cli-plugins-guard-clean-noproof");
+    let seed = temp.path().join("seed");
+    write_plugin(&seed, "alpha", "1.0.0", "Alpha", "base");
+    git_init_commit(&seed);
+
+    let checkout_a = temp.path().join("a");
+    let checkout_b = temp.path().join("b");
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&seed), path_str(&checkout_a)],
+    );
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&seed), path_str(&checkout_b)],
+    );
+    git_config_identity(&checkout_a);
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// clean-a\n");
+    run_git(&checkout_a, &["add", "plugins/alpha/main.js"]);
+    run_git(&checkout_a, &["commit", "-q", "-m", "clean-a"]);
+    let vault = temp.path().join("vault");
+    write_stamp_ignore(&vault);
+    let (opts_a, _guard) = options(&checkout_a, &vault);
+    assert!(sync_plugins(&opts_a).issues.is_empty());
+
+    // Checkout B never saw A's commit: no reachable commit holds the bundle.
+    let (opts_b, _guard_b) = options(&checkout_b, &vault);
+    let refused = sync_plugins(&opts_b);
+    assert!(
+        refused.issues.iter().any(|issue| {
+            issue.contains("refusing to overwrite plugin alpha")
+                && issue.contains("does not contain the stamped clean")
+        }),
+        "unknown clean head with no proving commit must refuse: {:?}",
+        refused.issues
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .unwrap(),
+        "// clean-a\n",
+        "refused sync must not change vault bytes"
+    );
+}
+
+#[test]
+fn dirty_stamp_with_dirty_incoming_permits_via_proof() {
+    let temp = TempDir::new("bob-cli-plugins-guard-dirty-incoming");
+    let seed = temp.path().join("seed");
+    write_plugin(&seed, "alpha", "1.0.0", "Alpha", "base");
+    git_init_commit(&seed);
+
+    let checkout_a = temp.path().join("a");
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&seed), path_str(&checkout_a)],
+    );
+    git_config_identity(&checkout_a);
+    let vault = temp.path().join("vault");
+    write_stamp_ignore(&vault);
+
+    // Dirty deploy from A, then land those bytes and move one commit past.
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// dirty-a\n");
+    let (opts_a, _guard) = options(&checkout_a, &vault);
+    assert!(sync_plugins(&opts_a).issues.is_empty());
+    run_git(&checkout_a, &["add", "plugins/alpha/main.js"]);
+    run_git(&checkout_a, &["commit", "-q", "-m", "land dirty-a"]);
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// later\n");
+    run_git(&checkout_a, &["add", "plugins/alpha/main.js"]);
+    run_git(&checkout_a, &["commit", "-q", "-m", "later update"]);
+
+    // Fresh checkout at the descendant HEAD, dirtied by an unrelated edit.
+    let checkout_b = temp.path().join("b");
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&checkout_a), path_str(&checkout_b)],
+    );
+    write_file(&checkout_b.join("notes.txt"), "unrelated work\n");
+    let (opts_b, _guard_b) = options(&checkout_b, &vault);
+    let landed = sync_plugins(&opts_b);
+    assert!(
+        landed.issues.is_empty(),
+        "dirty incoming with a proving ancestor must permit: {:?}",
+        landed.issues
+    );
+    let proving = landed.plugins[0].proving_commit.clone().expect("proof");
+    assert_eq!(proving, git_head_sha(&checkout_b, "HEAD~1"));
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .unwrap(),
+        "// later\n",
+        "proof must overwrite the dirty deploy without --force"
+    );
+}
+
+#[test]
+fn dirty_stamp_with_dirty_incoming_and_no_proof_refuses() {
+    let temp = TempDir::new("bob-cli-plugins-guard-dirty-noproof");
+    let seed = temp.path().join("seed");
+    write_plugin(&seed, "alpha", "1.0.0", "Alpha", "base");
+    git_init_commit(&seed);
+
+    let checkout_a = temp.path().join("a");
+    let checkout_b = temp.path().join("b");
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&seed), path_str(&checkout_a)],
+    );
+    run_git(
+        temp.path(),
+        &["clone", "-q", path_str(&seed), path_str(&checkout_b)],
+    );
+    let vault = temp.path().join("vault");
+    write_stamp_ignore(&vault);
+
+    write_file(&checkout_a.join("plugins/alpha/main.js"), "// dirty-a\n");
+    let (opts_a, _guard) = options(&checkout_a, &vault);
+    assert!(sync_plugins(&opts_a).issues.is_empty());
+
+    // B's history never held the dirty bytes, and B itself is dirty.
+    git_config_identity(&checkout_b);
+    write_file(&checkout_b.join("README.md"), "later\n");
+    run_git(&checkout_b, &["add", "README.md"]);
+    run_git(&checkout_b, &["commit", "-q", "-m", "unrelated"]);
+    write_file(&checkout_b.join("notes.txt"), "unrelated work\n");
+    let (opts_b, _guard_b) = options(&checkout_b, &vault);
+    let refused = sync_plugins(&opts_b);
+    assert!(
+        refused.issues.iter().any(|issue| {
+            issue.contains("refusing to overwrite plugin alpha")
+                && issue.contains("no single commit")
+        }),
+        "dirty incoming with no proving commit must refuse: {:?}",
+        refused.issues
+    );
+    assert_eq!(
+        fs::read_to_string(vault.join(".obsidian/plugins/alpha/main.js"))
+            .unwrap(),
+        "// dirty-a\n",
+        "refused sync must not change vault bytes"
+    );
+}
+
+#[test]
 fn vault_edited_after_deploy_refuses_despite_proof() {
     let temp = TempDir::new("bob-cli-plugins-guard-digest");
     let seed = temp.path().join("seed");

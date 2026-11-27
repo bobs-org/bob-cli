@@ -937,10 +937,14 @@ divergent, or unknown history",
                         ),
                     },
                 }
-            } else if incoming_clean
-                && let Some(proving) =
-                    find_inclusion_proof(incoming_repo, plugin_id, stamp)
+            } else if let Some(proving) =
+                find_inclusion_proof(incoming_repo, plugin_id, stamp)
             {
+                // The proof is about the vault's current bytes having
+                // landed, not about the incoming tree: when the stamped
+                // bundle sits in history, overwriting cannot erase
+                // unlanded work, so even a dirty incoming checkout may
+                // proceed (its own uncommitted bytes get a fresh stamp).
                 GuardDecision::Permit {
                     stamp_action: StampAction::Write,
                     proving_commit: Some(proving),
@@ -977,6 +981,18 @@ stamped bundle byte for byte",
                     stamp_action: StampAction::Write,
                     proving_commit: None,
                 },
+                _ if incoming_clean
+                    && let Some(proving) = find_inclusion_proof(
+                        incoming_repo,
+                        plugin_id,
+                        stamp,
+                    ) =>
+                {
+                    GuardDecision::Permit {
+                        stamp_action: StampAction::Write,
+                        proving_commit: Some(proving),
+                    }
+                }
                 _ => {
                     let remedy = clean_landed_remedy(incoming_repo, stamp);
                     let fallback;

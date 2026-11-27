@@ -84,9 +84,10 @@ only the plugin ids listed in `plugins.sync` in bob's config file; a missing \
 list exits 2 with a ready-to-paste snippet. Each real \
 deploy records a `.bob-deploy.json` provenance stamp beside the plugin. Sync \
 refuses to overwrite another checkout's uncommitted or non-ancestor deploy \
-unless --force is given, except that a clean checkout overwrites a dirty \
+unless --force is given, except that a sync overwrites a dirty \
 deploy from another checkout or host without --force when one commit reachable \
-from its HEAD holds the stamped bundle byte for byte; the sync names that \
+from its HEAD holds the stamped bundle byte for byte, and a clean checkout \
+does the same for a clean non-ancestor deploy; the sync names that \
 proving commit. Sync also refuses to overwrite a vault file that \
 has uncommitted changes in the vault Git repo unless --force is given. For \
 files that would change, sync prints a diff, and every overwritten vault file \
@@ -142,9 +143,10 @@ Git vault that stamp must be ignored (for example \
 `.obsidian/plugins/*/.bob-deploy.json`); --force does not bypass a tracked or \
 unignored stamp. Sync refuses to overwrite a deploy from another checkout's \
 uncommitted build, a non-ancestor clean revision, or unknown/incomplete \
-provenance unless --force is given, except that a clean checkout overwrites a \
+provenance unless --force is given, except that a sync overwrites a \
 dirty deploy from another checkout or host without --force when one commit \
-reachable from its HEAD holds the stamped bundle byte for byte; the sync \
+reachable from its HEAD holds the stamped bundle byte for byte, and a clean \
+checkout does the same for a non-ancestor clean revision; the sync \
 names that proving commit and mixed per-file matches from different commits \
 still refuse. A vault file that has uncommitted changes \
 in the vault Git repo is left alone with a warning unless --force is given, \
