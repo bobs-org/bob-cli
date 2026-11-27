@@ -220,6 +220,14 @@ Highlights sync bookkeeping, importer/reread fields, Zorg provenance, and
 meeting fields remain owned by their writers. `status` and `parent` are
 protected only when a managed or legacy reading-task tracker is present.
 
+These protections are a contract break for callers of `bob props update`.
+Earlier releases reported these reference keys as `loose` and accepted generic
+writes to them. Now `show` reports their `identity` or `derived` role with an
+owner and reason, and generic writes refuse with `prop_identity` or
+`prop_derived`. To change the file stem, use `bob ref rename`. For sync
+bookkeeping, run `bob ref scan`. To change reading state or residence, edit or
+move the reading task.
+
 Changing a reference title also retitles the first body H1 only when its text
 matches the previous title (frontmatter title, otherwise the current first H1,
 otherwise the file stem). Fenced and HTML-commented headings are skipped. The
