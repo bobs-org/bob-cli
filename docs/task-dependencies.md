@@ -274,7 +274,10 @@ with no R0 or D3.
   _immediately_ when no open prerequisite, no future `scheduled` date,
   and no remaining project reason remain. Otherwise it stays `[?]`.
   Removing the last project reason recovers residents that have no
-  own reason. The hooks keep the final word.
+  own reason. Obsidian's recovery index reads the same live notes as
+  reconcile, skipping `_conflicts/`, `_generated/`, `_templates/`,
+  `done/`, and dot-directories. A dangling link to a block id no scanned
+  task carries never defers recovery. The hooks keep the final word.
 - **Closing.** Closing a planned prerequisite links the dependents it
   fully unblocked into its slot (§12).
 - **Plain links.** Adding a dependency absorbs the pair's plain links in
@@ -420,8 +423,10 @@ prepared task lines join the tie edit in the same editor transaction.
    every open resident `[?]` with `#prj_is_blocked` when any added
    target is open, and transfers the strongest lane among `^prj` and
    its residents onto each open prerequisite (never onto a `^prj`
-   target, §13). Nav never regroups lines between sections; reconcile
-   does that within one interval.
+   target, §13). The dependent's note, and any note whose task this
+   gesture promotes, settle through bob-ledger-tools `api.taskSettle` v1.
+   That settle covers the local schedule rule, status groups, and badge
+   row. See [Writers settle note-local structure](task-status-hooks.md#writers-settle-note-local-structure).
 3. **Consume Pomodoro links after a newly Blocked dependent.** The live
    links of every newly Blocked dependent — including `^prj` and its
    newly Blocked residents — are removed from today's open Pomodoros;
