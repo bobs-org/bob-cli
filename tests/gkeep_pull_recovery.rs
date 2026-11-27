@@ -1,5 +1,6 @@
 //! Marker-free import-store transaction, portability, and identical-rendering tests.
 
+mod exec_stub;
 mod gkeep_support;
 
 use std::{fs, path::Path};
@@ -11,15 +12,12 @@ use gkeep_support::{
 
 fn write_token_script(vault: &Path) -> std::path::PathBuf {
     let path = vault.join("token.sh");
-    fs::write(&path, "#!/bin/sh\nprintf 'aas_et/test-master-token\\n'\n")
-        .expect("write token script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&path).expect("stat").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&path, perms).expect("chmod");
-    }
+    // Fork-safe scratch-then-copy writer (bead `bob-cli-5l`): no in-process
+    // writable descriptor on the executed stub.
+    exec_stub::write_executable_stub(
+        &path,
+        "#!/bin/sh\nprintf 'aas_et/test-master-token\\n'\n",
+    );
     path
 }
 
@@ -255,9 +253,11 @@ fn wrap_adapter_recording_head(
     let fake_path = fake.path().display().to_string().replace('\'', "'\\''");
     let vault = env.vault().display().to_string().replace('\'', "'\\''");
     let dest = out_dir.display().to_string().replace('\'', "'\\''");
-    fs::write(
+    // Fork-safe scratch-then-copy writer (bead `bob-cli-5l`): no in-process
+    // writable descriptor on the executed stub.
+    exec_stub::write_executable_stub(
         &path,
-        format!(
+        &format!(
             "#!/bin/sh\n\
              request=$(cat)\n\
              op=$(printf '%s' \"$request\" | sed -n 's/.*\"op\":\"\\([a-z_]*\\)\".*/\\1/p')\n\
@@ -269,15 +269,7 @@ fn wrap_adapter_recording_head(
              fi\n\
              printf '%s' \"$request\" | '{fake_path}'\n"
         ),
-    )
-    .expect("wrapper");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&path).expect("stat").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&path, perms).expect("chmod");
-    }
+    );
     path
 }
 

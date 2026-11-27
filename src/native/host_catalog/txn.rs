@@ -1242,11 +1242,15 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn commit_failure_rolls_back_the_write_and_unstages() {
-        use std::os::unix::fs::PermissionsExt;
         let (_temp, vault) = scratch();
         let hook = vault.join(".git/hooks/pre-commit");
-        fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
-        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        // Fork-safe scratch-then-copy writer: git executes this hook while
+        // other test threads fork, so an in-place `fs::write` can fail the
+        // hook exec with ETXTBSY (bead `bob-cli-5l`).
+        crate::native::test_stub::write_executable_stub(
+            &hook,
+            "#!/bin/sh\nexit 1\n",
+        );
         let before = head(&vault);
         let failure = apply_and_commit(
             &vault,
@@ -1412,7 +1416,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn commit_failure_rolls_back_rows_and_journal_append() {
-        use std::os::unix::fs::PermissionsExt;
         let (_temp, vault) = scratch();
         let target = vault.join(".bob/bank/athena.jsonl");
         let mut planned = plan(
@@ -1426,8 +1429,13 @@ mod tests {
             suffix: b"{\"kind\":\"bank.txn\"}\n".to_vec(),
         });
         let hook = vault.join(".git/hooks/pre-commit");
-        fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
-        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        // Fork-safe scratch-then-copy writer: git executes this hook while
+        // other test threads fork, so an in-place `fs::write` can fail the
+        // hook exec with ETXTBSY (bead `bob-cli-5l`).
+        crate::native::test_stub::write_executable_stub(
+            &hook,
+            "#!/bin/sh\nexit 1\n",
+        );
 
         let error = apply_and_commit(&vault, &Vec::new(), planned)
             .expect_err("commit failure rolls back both effects");

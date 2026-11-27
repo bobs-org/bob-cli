@@ -1,6 +1,7 @@
 //! `bob gmail sync` (and its hidden `pull` alias) stays on the fake gog
 //! transport and an isolated vault.
 
+mod exec_stub;
 mod gmail_support;
 
 use std::{fs, path::Path, process::Command};
@@ -2219,14 +2220,10 @@ fn sync_commits_only_owned_paths_and_noop_replay_keeps_head_and_journal() {
 fn install_failing_pre_commit(vault: &Path) {
     let hook = vault.join(".git/hooks/pre-commit");
     fs::create_dir_all(hook.parent().unwrap()).expect("hooks dir");
-    fs::write(&hook, "#!/bin/sh\nexit 1\n").expect("write hook");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut permissions = fs::metadata(&hook).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&hook, permissions).unwrap();
-    }
+    // Fork-safe scratch-then-copy writer: git executes this hook while
+    // other test threads fork, so an in-place `fs::write` can fail the
+    // hook exec with ETXTBSY (bead `bob-cli-5l`).
+    exec_stub::write_executable_stub(&hook, "#!/bin/sh\nexit 1\n");
 }
 
 #[test]

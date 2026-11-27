@@ -1,5 +1,6 @@
 //! `bob gcal note`: command skeleton, selection, and read-only modes.
 
+mod exec_stub;
 mod gcal_support;
 
 use gcal_support::{
@@ -12,9 +13,6 @@ use std::{
     path::Path,
     process::Stdio,
 };
-
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 
 fn prepare(env: &GcalEnv) {
     env.prepare_healthy_vault();
@@ -2488,19 +2486,11 @@ fn write_json_reports_waiting_reply_and_maybe_statuses() {
     }
 }
 
-fn chmod_exec(path: &Path) {
-    #[cfg(unix)]
-    {
-        let mut permissions =
-            fs::metadata(path).expect("stat script").permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).expect("chmod script");
-    }
-}
-
 fn write_script(path: &Path, body: &str) {
-    fs::write(path, body).expect("write script");
-    chmod_exec(path);
+    // Fork-safe scratch-then-copy writer: an in-place `fs::write` leaves a
+    // writable fd a concurrently forked test thread inherits, so exec-ing
+    // the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+    exec_stub::write_executable_stub(path, body);
 }
 
 fn install_lookup(fake: &FakeGog, event: &Value) {

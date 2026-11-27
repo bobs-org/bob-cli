@@ -6,6 +6,9 @@
 
 #![allow(dead_code)]
 
+#[path = "../exec_stub/mod.rs"]
+mod exec_stub;
+
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
@@ -18,9 +21,6 @@ use std::{
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 
 pub(crate) static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -230,8 +230,10 @@ impl FakeGog {
         let root = env.root().join(name);
         fs::create_dir_all(&root).expect("create fake gog dir");
         let path = root.join("gog");
-        fs::copy(FAKE_GOG_SRC, &path).expect("copy fake gog");
-        chmod_exec(&path);
+        // Fork-safe child-`cp` writer: an in-process `fs::copy` holds a
+        // writable descriptor another test thread's fork can inherit, so
+        // exec-ing the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+        exec_stub::copy_executable_stub(Path::new(FAKE_GOG_SRC), &path);
         let home = root.join("home");
         fs::create_dir_all(&home).expect("create fake home dir");
         Self {
@@ -773,16 +775,6 @@ impl FakeGog {
     }
 }
 
-fn chmod_exec(path: &Path) {
-    #[cfg(unix)]
-    {
-        let mut permissions =
-            fs::metadata(path).expect("stat fake gog").permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).expect("chmod fake gog");
-    }
-}
-
 pub(crate) fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
@@ -829,12 +821,14 @@ impl FakeNotify {
         let log = root.join("notifications.log");
         for tool in ["notify-send", "osascript"] {
             let path = bin.join(tool);
-            fs::write(
+            // Fork-safe scratch-then-copy writer: an in-place `fs::write`
+            // leaves a writable fd a concurrently forked test thread
+            // inherits, so exec-ing the stub can fail with ETXTBSY
+            // (bead `bob-cli-5l`).
+            exec_stub::write_executable_stub(
                 &path,
                 "#!/bin/sh\nprintf '%s argv:' \"$0\" >> \"$FAKE_NOTIFY_LOG\"\nprintf ' <%s>' \"$@\" >> \"$FAKE_NOTIFY_LOG\"\nprintf '\\n' >> \"$FAKE_NOTIFY_LOG\"\n",
-            )
-            .expect("write fake notify tool");
-            chmod_exec(&path);
+            );
         }
         Self { bin, log }
     }

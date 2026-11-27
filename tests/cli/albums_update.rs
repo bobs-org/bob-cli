@@ -990,16 +990,16 @@ fn usage_added_after_forward_add_makes_inverse_remove_refuse() {
 
 #[test]
 fn post_sync_failure_keeps_local_commit_and_inverse_ops() {
-    use std::os::unix::fs::PermissionsExt;
     let temp = TempDir::new("album-update-post-sync");
     let vault = fixture(&temp);
     let hook = vault.join(".git/hooks/pre-push");
-    fs::write(
+    // Fork-safe scratch-then-copy writer: git executes this hook while
+    // other test threads fork, so an in-place write can fail the hook exec
+    // with ETXTBSY (bead `bob-cli-5l`).
+    write_executable(
         &hook,
         "#!/bin/sh\ngit log -1 --format=%s | grep -q '^albums: update' && exit 1\nexit 0\n",
-    )
-    .unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    );
     let base = head(&vault);
     let expect = fingerprint(&vault, &temp);
     let body = envelope(

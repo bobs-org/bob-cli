@@ -5245,14 +5245,13 @@ mod tests {
 
     fn install_failing_hook(vault: &Path) {
         let hook = vault.join(".git/hooks/pre-commit");
-        fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mut permissions = fs::metadata(&hook).unwrap().permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(&hook, permissions).unwrap();
-        }
+        // Fork-safe scratch-then-copy writer: git executes this hook while
+        // other test threads fork, so an in-place `fs::write` can fail the
+        // hook exec with ETXTBSY (bead `bob-cli-5l`).
+        crate::native::test_stub::write_executable_stub(
+            &hook,
+            "#!/bin/sh\nexit 1\n",
+        );
     }
 
     /// A filing candidate whose thread carries an inline image, so the

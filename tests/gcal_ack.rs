@@ -1,5 +1,6 @@
 //! `bob gcal ack`: queue and one-shot modes use only fake gog and temp vaults.
 
+mod exec_stub;
 mod gcal_support;
 
 use gcal_support::{
@@ -981,15 +982,10 @@ fn run_gcal_script(
 
 fn write_exec_script(env: &GcalEnv, name: &str, body: &str) -> String {
     let path = env.vault().join(name);
-    fs::write(&path, body).expect("write helper script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mut permissions =
-            fs::metadata(&path).expect("stat helper").permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&path, permissions).expect("chmod helper");
-    }
+    // Fork-safe scratch-then-copy writer: an in-place `fs::write` leaves a
+    // writable fd a concurrently forked test thread inherits, so exec-ing
+    // the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+    exec_stub::write_executable_stub(&path, body);
     path.to_string_lossy().into_owned()
 }
 

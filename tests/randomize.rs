@@ -5,6 +5,8 @@
 //! The few helpers below are copied from `tests/cli/support.rs` on purpose so
 //! this file stays self-contained instead of growing that file.
 
+mod exec_stub;
+
 use std::{
     ffi::OsStr,
     fs,
@@ -1600,7 +1602,10 @@ fn randomize_post_sync_conflict_keeps_local_commit_and_warns() {
     // One-shot post-commit hook: after randomize commits, the peer
     // pushes a same-line edit so the post-sync merge conflicts.
     let hook = vault.join(".git/hooks/post-commit");
-    write_file(
+    // Fork-safe scratch-then-copy writer: git executes this hook while
+    // other test threads fork, so an in-place `write_file` can fail the
+    // hook exec with ETXTBSY (bead `bob-cli-5l`).
+    exec_stub::write_executable_stub(
         &hook,
         &format!(
             concat!(
@@ -1618,14 +1623,6 @@ fn randomize_post_sync_conflict_keeps_local_commit_and_warns() {
             peer = path_str(&peer),
         ),
     );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions =
-            fs::metadata(&hook).expect("hook metadata").permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&hook, permissions).expect("chmod hook");
-    }
 
     let output = run_randomize(&temp, &vault, &config, &["--seed", SEED]);
     assert_exit(&output, 1);

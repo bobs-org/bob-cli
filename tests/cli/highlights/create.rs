@@ -2857,13 +2857,10 @@ case "$url" in
     ;;
 esac
 "#;
-    std::fs::write(&path, script).expect("write fake curl");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-            .expect("chmod fake curl");
-    }
+    // Fork-safe scratch-then-copy writer: other test threads fork while
+    // this stub is written, so an in-place write can fail the stub exec
+    // with ETXTBSY (bead `bob-cli-5l`).
+    write_executable(&path, script);
     path
 }
 

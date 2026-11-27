@@ -8,7 +8,6 @@
 
 use crate::support::*;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -92,9 +91,10 @@ case "$script" in
 esac
 "#;
     let path = dir.join("zsh");
-    fs::write(&path, script).expect("write fake zsh");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
-        .expect("chmod fake zsh");
+    // Fork-safe scratch-then-copy writer: `bob` executes this fake shell
+    // while other test threads fork, so an in-place write can fail the
+    // stub exec with ETXTBSY (bead `bob-cli-5l`).
+    write_executable(&path, script);
 }
 
 fn write_fake_bash(dir: &Path) {
@@ -135,9 +135,10 @@ case "$script" in
 esac
 "#;
     let path = dir.join("bash");
-    fs::write(&path, script).expect("write fake bash");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
-        .expect("chmod fake bash");
+    // Fork-safe scratch-then-copy writer: `bob` executes this fake shell
+    // while other test threads fork, so an in-place write can fail the
+    // stub exec with ETXTBSY (bead `bob-cli-5l`).
+    write_executable(&path, script);
 }
 
 fn completion_command(temp: &TempDir, fake: &Path) -> Command {
@@ -678,9 +679,10 @@ fn verify_probe_classifications() {
 fn path_shadow_warns() {
     let temp = TempDir::new("bob-cli-completion-shadow");
     let fake = fakebin(&temp);
-    fs::write(fake.join("bob"), "#!/bin/sh\nexit 0\n").expect("write fake bob");
-    fs::set_permissions(fake.join("bob"), fs::Permissions::from_mode(0o755))
-        .expect("chmod fake bob");
+    // Fork-safe scratch-then-copy writer: `bob` executes this fake `bob`
+    // while other test threads fork, so an in-place write can fail the
+    // stub exec with ETXTBSY (bead `bob-cli-5l`).
+    write_executable(&fake.join("bob"), "#!/bin/sh\nexit 0\n");
 
     let status = completion_command(&temp, &fake)
         .arg("status")

@@ -4,6 +4,7 @@
 //! spawn either, `-r` contacts the adapter at most once, and every skip
 //! reason shows up in the JSON. Nothing here touches live Keep.
 
+mod exec_stub;
 mod gkeep_support;
 
 use std::{
@@ -185,15 +186,10 @@ fn root_of(env: &GkeepEnv) -> PathBuf {
 }
 
 fn write_script(path: &Path, body: &str) {
-    fs::write(path, body).expect("write script");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions =
-            fs::metadata(path).expect("stat script").permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).expect("chmod script");
-    }
+    // Fork-safe scratch-then-copy writer: an in-place `fs::write` leaves a
+    // writable fd a concurrently forked test thread inherits, so exec-ing
+    // the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+    exec_stub::write_executable_stub(path, body);
 }
 
 fn stamp(at: chrono::DateTime<Utc>) -> String {

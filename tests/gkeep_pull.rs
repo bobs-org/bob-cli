@@ -3,6 +3,7 @@
 //! Every test uses the fake adapter (`BOB_GKEEP_ADAPTER`); no test touches
 //! live Google Keep.
 
+mod exec_stub;
 mod gkeep_support;
 
 use std::{
@@ -15,9 +16,6 @@ use gkeep_support::{
     archive_ok, error_response, note, snapshot_ok, stderr, stdout, FakeAdapter,
     GkeepEnv, TempDir,
 };
-
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 
 #[cfg(target_os = "linux")]
 use std::{io::Write as _, process::Stdio};
@@ -33,16 +31,12 @@ fn default_target() -> String {
 
 fn write_token_script(vault: &Path) -> PathBuf {
     let path = vault.join("token.sh");
-    fs::write(&path, "#!/bin/sh\nprintf 'aas_et/test-master-token\\n'\n")
-        .expect("write token script");
-    #[cfg(unix)]
-    {
-        let mut perms = fs::metadata(&path)
-            .expect("stat token script")
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&path, perms).expect("chmod token script");
-    }
+    // Fork-safe scratch-then-copy writer (bead `bob-cli-5l`): no in-process
+    // writable descriptor on the executed stub.
+    exec_stub::write_executable_stub(
+        &path,
+        "#!/bin/sh\nprintf 'aas_et/test-master-token\\n'\n",
+    );
     path
 }
 
@@ -1133,13 +1127,10 @@ fn empty_snapshot_second_pull_reports_nothing() {
 // ---------- URL-only (R5) clip fixtures ----------
 
 fn write_executable(path: &Path, script: &str) {
-    fs::write(path, script).expect("write script");
-    #[cfg(unix)]
-    {
-        let mut perms = fs::metadata(path).expect("stat script").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).expect("chmod script");
-    }
+    // Fork-safe scratch-then-copy writer: an in-place `fs::write` leaves a
+    // writable fd a concurrently forked test thread inherits, so exec-ing
+    // the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+    exec_stub::write_executable_stub(path, script);
 }
 
 /// A one-page PDF with no annotations, standing in for download and
@@ -2961,9 +2952,11 @@ fn ignored_target_parent_exclusion_and_fatal_git_are_truthful() {
         .output()
         .expect("which git");
     let real = String::from_utf8_lossy(&real_git.stdout).trim().to_string();
-    fs::write(
+    // Fork-safe scratch-then-copy writer (bead `bob-cli-5l`): no in-process
+    // writable descriptor on the executed stub.
+    exec_stub::write_executable_stub(
         &wrapper,
-        format!(
+        &format!(
             "#!/bin/sh\n\
              case \" $* \" in\n\
              *' check-ignore '*) echo 'fatal: injected' >&2; exit 128 ;;\n\
@@ -2971,14 +2964,7 @@ fn ignored_target_parent_exclusion_and_fatal_git_are_truthful() {
              exec '{}' \"$@\"\n",
             real.replace('\'', "'\\''")
         ),
-    )
-    .expect("wrapper");
-    #[cfg(unix)]
-    {
-        let mut perms = fs::metadata(&wrapper).expect("stat").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&wrapper, perms).expect("chmod");
-    }
+    );
     fake3.respond("snapshot", &snapshot_ok("bryanbugyi34@gmail.com", vec![n1]));
     fake3.respond("archive", &archive_ok(vec![("note-1", "archived")]));
     let path = format!(

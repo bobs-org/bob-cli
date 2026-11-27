@@ -1,6 +1,7 @@
 //! `bob gkeep list` reconciliation view: sections, states, filters,
 //! footers, Keep failure, and JSON.
 
+mod exec_stub;
 mod gkeep_support;
 
 use std::fs;
@@ -30,16 +31,12 @@ fn fingerprint(title: &str, text: &str) -> String {
 /// work without a real `pass` store.
 fn install_token_stub(env: &GkeepEnv) {
     let path = env.vault().join("token.sh");
-    fs::write(&path, "#!/bin/sh\nprintf 'aas_et/test-master-token\\n'\n")
-        .expect("write token stub");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions =
-            fs::metadata(&path).expect("stat token stub").permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&path, permissions).expect("chmod token stub");
-    }
+    // Fork-safe scratch-then-copy writer (bead `bob-cli-5l`): no in-process
+    // writable descriptor on the executed stub.
+    exec_stub::write_executable_stub(
+        &path,
+        "#!/bin/sh\nprintf 'aas_et/test-master-token\\n'\n",
+    );
     let quoted = path.to_string_lossy().replace('\'', "'\\''");
     env.write_config(&format!(
         "gkeep:\n  email: bryanbugyi34@gmail.com\n  token_command: \"sh '{quoted}'\"\n",

@@ -955,20 +955,19 @@ fn record_field_template_text_stays_opaque_and_template_expands_sigils() {
 #[cfg(unix)]
 #[test]
 fn forced_clip_refuses_record_before_running_clipboard_command() {
-    use std::os::unix::fs::PermissionsExt;
-
     let (temp, vault, config) = complete_fixture();
     let invoked = temp.path().join("clipboard-was-run");
     let command = temp.path().join("fake-clipboard");
-    write_file(
+    // Fork-safe scratch-then-copy writer: `bob` executes this clipboard
+    // stub while other test threads fork, so an in-place write can fail
+    // the stub exec with ETXTBSY (bead `bob-cli-5l`).
+    write_executable(
         &command,
         &format!(
             "#!/bin/sh\nprintf called > '{}'\nprintf clipboard\n",
             invoked.display()
         ),
     );
-    fs::set_permissions(&command, fs::Permissions::from_mode(0o755))
-        .expect("make fake clipboard executable");
     let output =
         capture(&vault, &config, &["--clip", "-f", "json", COMPLETE_RAMEN])
             .env("BOB_CLIPBOARD_CMD", &command)

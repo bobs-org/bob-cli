@@ -3,7 +3,7 @@
 use std::{
     fs,
     fs::OpenOptions,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     process::{Command, Output},
 };
@@ -457,9 +457,10 @@ fn post_sync_failure_keeps_the_scoped_local_commit_and_reports_failure() {
     git_in(&vault, ["commit", "-q", "-m", "post-sync fixture"]);
     git_in(&vault, ["push", "-q", "origin", "master"]);
     let hook = remote.join("hooks/pre-receive");
-    write_file(&hook, "#!/bin/sh\nexit 1\n");
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755))
-        .expect("make rejecting hook executable");
+    // Fork-safe scratch-then-copy writer: git executes this hook while
+    // other test threads fork, so an in-place write can fail the hook exec
+    // with ETXTBSY (bead `bob-cli-5l`).
+    write_executable(&hook, "#!/bin/sh\nexit 1\n");
 
     let output = run_json(
         &temp,
@@ -684,9 +685,10 @@ fn ordinary_commit_failure_keeps_the_write_without_post_sync() {
     git_in(&vault, ["commit", "-q", "-m", "commit-failure fixture"]);
     git_in(&vault, ["push", "-q", "origin", "master"]);
     let hook = vault.join(".git/hooks/commit-msg");
-    write_file(&hook, "#!/bin/sh\nexit 1\n");
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755))
-        .expect("make rejecting commit-msg hook executable");
+    // Fork-safe scratch-then-copy writer: git executes this hook while
+    // other test threads fork, so an in-place write can fail the hook exec
+    // with ETXTBSY (bead `bob-cli-5l`).
+    write_executable(&hook, "#!/bin/sh\nexit 1\n");
     let remote_before = git([
         "--git-dir",
         path_str(&remote),
@@ -831,7 +833,10 @@ fn post_sync_conflict_keeps_the_local_commit_and_reports_remote_wins() {
     );
 
     let hook = vault.join(".git/hooks/post-commit");
-    write_file(
+    // Fork-safe scratch-then-copy writer: git executes this hook while
+    // other test threads fork, so an in-place write can fail the hook exec
+    // with ETXTBSY (bead `bob-cli-5l`).
+    write_executable(
         &hook,
         &format!(
             concat!(
@@ -848,8 +853,6 @@ fn post_sync_conflict_keeps_the_local_commit_and_reports_remote_wins() {
             peer = path_str(&peer),
         ),
     );
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755))
-        .expect("make post-commit hook executable");
 
     let output = run_json(
         &temp,

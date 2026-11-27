@@ -612,12 +612,13 @@ fn wrong_vault_refuses_before_locking_or_writing() {
 #[cfg(unix)]
 #[test]
 fn commit_failure_rolls_the_catalogs_back() {
-    use std::os::unix::fs::PermissionsExt;
     let temp = TempDir::new("nb-sync-commit-fail");
     let vault = online_vault(&temp);
     let hook = vault.join(".git/hooks/pre-commit");
-    fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    // Fork-safe scratch-then-copy writer: git executes this hook while
+    // other test threads fork, so an in-place write can fail the hook exec
+    // with ETXTBSY (bead `bob-cli-5l`).
+    write_executable(&hook, "#!/bin/sh\nexit 1\n");
     let base = head(&vault);
     let files = snapshot(&vault);
 
@@ -641,17 +642,17 @@ fn commit_failure_rolls_the_catalogs_back() {
 #[cfg(unix)]
 #[test]
 fn post_sync_failure_is_reported_apart_from_an_unapplied_run() {
-    use std::os::unix::fs::PermissionsExt;
     let temp = TempDir::new("nb-sync-post-fail");
     let vault = online_vault(&temp);
     // Refuse only the push that would publish the catalog commit.
     let hook = vault.join(".git/hooks/pre-push");
-    fs::write(
+    // Fork-safe scratch-then-copy writer: git executes this hook while
+    // other test threads fork, so an in-place write can fail the hook exec
+    // with ETXTBSY (bead `bob-cli-5l`).
+    write_executable(
         &hook,
         "#!/bin/sh\ngit log -1 --format=%s | grep -q '^notebooks:' && exit 1\nexit 0\n",
-    )
-    .unwrap();
-    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    );
     let base = head(&vault);
 
     let output = run(&vault, &temp, &["sync", "-f", "json"]);

@@ -321,7 +321,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn gmail_kick_spawns_scoped_command_and_keeps_job_on_spawn_failure() {
-        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
         let _env = TestEnvGuard::set(&[(
             "XDG_STATE_HOME",
@@ -333,8 +332,13 @@ mod tests {
         let args = temp.path().join("args");
         let _args_env =
             TestEnvGuard::set(&[("GMAIL_TEST_ARGS", Some(args.as_os_str()))]);
-        fs::write(&exe, "#!/bin/sh\nprintf '%s\\n' \"$BOB_GMAIL_LINK_WORKER\" \"$@\" > \"$GMAIL_TEST_ARGS\"\n").unwrap();
-        fs::set_permissions(&exe, fs::Permissions::from_mode(0o700)).unwrap();
+        // Fork-safe scratch-then-copy writer: an in-place `fs::write`
+        // leaves a writable fd a concurrently forked test thread inherits,
+        // so exec-ing the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+        crate::native::test_stub::write_executable_stub(
+            &exe,
+            "#!/bin/sh\nprintf '%s\\n' \"$BOB_GMAIL_LINK_WORKER\" \"$@\" > \"$GMAIL_TEST_ARGS\"\n",
+        );
         kick_with(&exe, temp.path(), std::slice::from_ref(&note)).unwrap();
         let deadline =
             std::time::Instant::now() + std::time::Duration::from_secs(5);

@@ -4,6 +4,7 @@
 //! so they mean paste on every OS (on macOS the default would be the
 //! browser flow, which would wait out the consent window).
 
+mod exec_stub;
 mod gmail_support;
 
 use std::{fs, process::Command};
@@ -597,12 +598,10 @@ fn failed_git_commit_retries_without_duplicate_cards_and_logs_after_commit() {
     let env = GmailEnv::new("bob-cli-gmail-save-git-retry");
     initialize_git_vault(env.vault());
     let hook = env.vault().join(".git/hooks/pre-commit");
-    fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    // Fork-safe scratch-then-copy writer: git executes this hook while
+    // other test threads fork, so an in-place `fs::write` can fail the
+    // hook exec with ETXTBSY (bead `bob-cli-5l`).
+    exec_stub::write_executable_stub(&hook, "#!/bin/sh\nexit 1\n");
     let fake = FakeGog::new(&env, "gog").scenario("thread_nonempty");
     let first =
         run_gmail(&env, &fake, &["save", "0123456789abcdef", "-f", "json"]);
@@ -672,12 +671,10 @@ fn failed_image_commit_retry_records_create_and_origin_once() {
     let env = GmailEnv::new("bob-cli-gmail-image-retry");
     initialize_git_vault(env.vault());
     let hook = env.vault().join(".git/hooks/pre-commit");
-    fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
-    }
+    // Fork-safe scratch-then-copy writer: git executes this hook while
+    // other test threads fork, so an in-place `fs::write` can fail the
+    // hook exec with ETXTBSY (bead `bob-cli-5l`).
+    exec_stub::write_executable_stub(&hook, "#!/bin/sh\nexit 1\n");
     let image = b"synthetic image bytes".repeat(300);
     let fake = FakeGog::new(&env, "gog");
     let (thread, attachments) = synthetic_image_thread(

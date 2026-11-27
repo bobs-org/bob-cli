@@ -6,7 +6,6 @@ use crate::support::*;
 use serde_json::Value;
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
     process::{Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
@@ -31,7 +30,9 @@ impl Fixture {
             "# 2026-11-18\n## Pomodoros\n- [ ] 0900-0930 Test\n",
         )
         .unwrap();
-        fs::write(this.path("step.py"), r#"#!/usr/bin/env python3
+        write_executable(
+            &this.path("step.py"),
+            r#"#!/usr/bin/env python3
 import json, os, pathlib, signal, subprocess, sys, time
 name = {'ref':'refs', 'task':'tasks'}.get(sys.argv[1], sys.argv[1])
 root = pathlib.Path(os.environ['TICK_FIXTURE'])
@@ -66,12 +67,8 @@ else:
 exit_code = os.environ.get('FAKE_EXIT_' + name.upper())
 if exit_code:
     sys.exit(int(exit_code))
-"#).unwrap();
-        fs::set_permissions(
-            this.path("step.py"),
-            fs::Permissions::from_mode(0o755),
-        )
-        .unwrap();
+"#,
+        );
         this
     }
     fn path(&self, name: &str) -> std::path::PathBuf {

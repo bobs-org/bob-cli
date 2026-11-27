@@ -9,6 +9,9 @@
 
 #![allow(dead_code)]
 
+#[path = "../exec_stub/mod.rs"]
+mod exec_stub;
+
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -16,9 +19,6 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
-
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 
 pub(crate) static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -184,7 +184,10 @@ impl GkeepEnv {
     /// with `.env("BOB_GKEEP_ADAPTER", path)`.
     pub(crate) fn write_fake_adapter(&self) -> PathBuf {
         let path = self.dir.path().join("fake-gkeep-adapter.sh");
-        fs::write(
+        // Fork-safe scratch-then-copy writer: an in-place `fs::write`
+        // leaves a writable fd a concurrently forked test thread inherits,
+        // so exec-ing the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+        exec_stub::write_executable_stub(
             &path,
             r#"#!/bin/sh
 # Fake gkeep adapter: one JSON request on stdin, one JSON response on
@@ -199,17 +202,7 @@ case "$request" in
     ;;
 esac
 "#,
-        )
-        .expect("write fake adapter");
-        #[cfg(unix)]
-        {
-            let mut permissions = fs::metadata(&path)
-                .expect("stat fake adapter")
-                .permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(&path, permissions)
-                .expect("chmod fake adapter");
-        }
+        );
         path
     }
 }
@@ -329,17 +322,10 @@ impl FakeAdapter {
         fs::create_dir_all(root.join("responses"))
             .expect("create responses dir");
         let path = root.join("fake-adapter.sh");
-        fs::write(&path, fake_adapter_script(&root))
-            .expect("write fake adapter");
-        #[cfg(unix)]
-        {
-            let mut permissions = fs::metadata(&path)
-                .expect("stat fake adapter")
-                .permissions();
-            permissions.set_mode(0o755);
-            fs::set_permissions(&path, permissions)
-                .expect("chmod fake adapter");
-        }
+        // Fork-safe scratch-then-copy writer: an in-place `fs::write`
+        // leaves a writable fd a concurrently forked test thread inherits,
+        // so exec-ing the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+        exec_stub::write_executable_stub(&path, &fake_adapter_script(&root));
         Self { root, path }
     }
 

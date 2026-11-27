@@ -4,6 +4,7 @@
 //! shell scripts backed by a temp file stand in for the token store and
 //! reader. Nothing here touches live Keep.
 
+mod exec_stub;
 mod gkeep_support;
 
 use std::{
@@ -46,44 +47,39 @@ fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "'\\''"))
 }
 
-/// Make `path` executable on unix.
-fn chmod_exec(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut permissions =
-            fs::metadata(path).expect("stat script").permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).expect("chmod script");
-    }
-}
-
 /// A `token_command` stub that prints `token`.
 fn write_token_reader(root: &Path, token: &str) -> PathBuf {
     let path = root.join("read-token.sh");
-    fs::write(&path, format!("#!/bin/sh\nprintf '%s\\n' '{token}'\n"))
-        .expect("write token reader");
-    chmod_exec(&path);
+    // Fork-safe scratch-then-copy writer: an in-place `fs::write` leaves a
+    // writable fd a concurrently forked test thread inherits, so exec-ing
+    // the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+    exec_stub::write_executable_stub(
+        &path,
+        &format!("#!/bin/sh\nprintf '%s\\n' '{token}'\n"),
+    );
     path
 }
 
 /// A `token_store_command` stub that saves stdin to `token_file`.
 fn write_token_store(root: &Path, token_file: &Path) -> PathBuf {
     let path = root.join("store-token.sh");
-    fs::write(
+    // Fork-safe scratch-then-copy writer: an in-place `fs::write` leaves a
+    // writable fd a concurrently forked test thread inherits, so exec-ing
+    // the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+    exec_stub::write_executable_stub(
         &path,
-        format!("#!/bin/sh\ncat > {}\n", shell_quote(token_file)),
-    )
-    .expect("write token store");
-    chmod_exec(&path);
+        &format!("#!/bin/sh\ncat > {}\n", shell_quote(token_file)),
+    );
     path
 }
 
 /// A `token_store_command` stub that always fails.
 fn write_failing_store(root: &Path) -> PathBuf {
     let path = root.join("failing-store.sh");
-    fs::write(&path, "#!/bin/sh\nexit 3\n").expect("write failing store");
-    chmod_exec(&path);
+    // Fork-safe scratch-then-copy writer: an in-place `fs::write` leaves a
+    // writable fd a concurrently forked test thread inherits, so exec-ing
+    // the stub can fail with ETXTBSY (bead `bob-cli-5l`).
+    exec_stub::write_executable_stub(&path, "#!/bin/sh\nexit 3\n");
     path
 }
 
@@ -139,9 +135,12 @@ fn run_doctor(
     let bin = root.join("bin");
     fs::create_dir_all(&bin).expect("create test bin directory");
     let uv = bin.join("uv");
-    fs::write(&uv, "#!/bin/sh\nprintf '%s\\n' 'uv 0.9.0'\n")
-        .expect("write uv stub");
-    chmod_exec(&uv);
+    // Fork-safe scratch-then-copy writer (bead `bob-cli-5l`): no in-process
+    // writable descriptor on the executed stub.
+    exec_stub::write_executable_stub(
+        &uv,
+        "#!/bin/sh\nprintf '%s\\n' 'uv 0.9.0'\n",
+    );
     let path = std::env::var_os("PATH").unwrap_or_default();
     command.env(
         "PATH",
@@ -183,12 +182,12 @@ fn login_via_stdin_exchanges_stores_and_verifies() {
     let reader = write_token_reader(&root, "unused-until-stored");
     let store = write_token_store(&root, &token_file);
     // The reader prints whatever the store saved.
-    fs::write(
+    // Fork-safe scratch-then-copy writer (bead `bob-cli-5l`): no in-process
+    // writable descriptor on the executed stub.
+    exec_stub::write_executable_stub(
         &reader,
-        format!("#!/bin/sh\ncat {}\n", shell_quote(&token_file)),
-    )
-    .expect("rewrite token reader");
-    chmod_exec(&reader);
+        &format!("#!/bin/sh\ncat {}\n", shell_quote(&token_file)),
+    );
     let reader_cmd = format!("sh {}", shell_quote(&reader));
     let store_cmd = format!("sh {}", shell_quote(&store));
     write_auth_config(&env, &reader_cmd, &store_cmd);
@@ -249,12 +248,12 @@ fn login_email_override_wins_and_warns_on_cookie_shape() {
     let token_file = root.join("token.txt");
     let store = write_token_store(&root, &token_file);
     let reader = root.join("read-token.sh");
-    fs::write(
+    // Fork-safe scratch-then-copy writer (bead `bob-cli-5l`): no in-process
+    // writable descriptor on the executed stub.
+    exec_stub::write_executable_stub(
         &reader,
-        format!("#!/bin/sh\ncat {}\n", shell_quote(&token_file)),
-    )
-    .expect("write token reader");
-    chmod_exec(&reader);
+        &format!("#!/bin/sh\ncat {}\n", shell_quote(&token_file)),
+    );
     let reader_cmd = format!("sh {}", shell_quote(&reader));
     let store_cmd = format!("sh {}", shell_quote(&store));
     write_auth_config(&env, &reader_cmd, &store_cmd);
@@ -380,9 +379,12 @@ fn login_readback_mismatch_writes_a_recovery_file() {
     // The store saves a different token than the exchange produced.
     let reader = write_token_reader(&root, "aas_et/other-token");
     let store = root.join("store-token.sh");
-    fs::write(&store, "#!/bin/sh\ncat >/dev/null\nexit 0\n")
-        .expect("write store stub");
-    chmod_exec(&store);
+    // Fork-safe scratch-then-copy writer (bead `bob-cli-5l`): no in-process
+    // writable descriptor on the executed stub.
+    exec_stub::write_executable_stub(
+        &store,
+        "#!/bin/sh\ncat >/dev/null\nexit 0\n",
+    );
     let reader_cmd = format!("sh {}", shell_quote(&reader));
     let store_cmd = format!("sh {}", shell_quote(&store));
     write_auth_config(&env, &reader_cmd, &store_cmd);
@@ -686,12 +688,12 @@ fn login_records_a_keep_observation() {
     let token_file = root.join("token.txt");
     let reader = write_token_reader(&root, "unused-until-stored");
     let store = write_token_store(&root, &token_file);
-    fs::write(
+    // Fork-safe scratch-then-copy writer (bead `bob-cli-5l`): no in-process
+    // writable descriptor on the executed stub.
+    exec_stub::write_executable_stub(
         &reader,
-        format!("#!/bin/sh\ncat {}\n", shell_quote(&token_file)),
-    )
-    .expect("rewrite token reader");
-    chmod_exec(&reader);
+        &format!("#!/bin/sh\ncat {}\n", shell_quote(&token_file)),
+    );
     let reader_cmd = format!("sh {}", shell_quote(&reader));
     let store_cmd = format!("sh {}", shell_quote(&store));
     write_auth_config(&env, &reader_cmd, &store_cmd);

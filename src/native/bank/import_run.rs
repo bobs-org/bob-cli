@@ -1759,13 +1759,16 @@ mod tests {
 
     #[test]
     fn post_sync_failure_keeps_the_local_commit_and_journal() {
-        use std::os::unix::fs::PermissionsExt;
-
         let vault = syncable_vault();
         let _guard = sync_environment(&vault);
         let hook = vault._temp.path().join("remote.git/hooks/pre-receive");
-        fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
-        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        // Fork-safe scratch-then-copy writer: git executes this hook while
+        // other test threads fork, so an in-place `fs::write` can fail the
+        // hook exec with ETXTBSY (bead `bob-cli-5l`).
+        crate::native::test_stub::write_executable_stub(
+            &hook,
+            "#!/bin/sh\nexit 1\n",
+        );
 
         let report = apply(
             &vault.path,
