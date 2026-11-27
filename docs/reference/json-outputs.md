@@ -5,17 +5,15 @@ description: Machine-readable Bob output contracts.
 
 # JSON outputs
 
-Fixtures run this checkout's `bob` against a synthetic vault with isolated
-`HOME`/`XDG_*`, `BOB_NOW=2026-10-20 12:00:00`, and `TZ=UTC`; jobs kick off.
-Network, clipboard, sync, and hooks are stubbed. Only stdout `schema_version` counts.
+Examples use a synthetic vault, isolated `HOME`/`XDG_*`,
+`BOB_NOW=2026-10-20 12:00:00`, and `TZ=UTC`.
 
 ## Framing
 
 JSON goes to stdout and chatter to stderr; usage errors exit 2.
 
-Versioned helpers include `ok` and `schema_version`; `tick` uses
-`exit_code` without `ok`. Some capture-helper errors return unversioned
-`{"ok":false,"error":"…"}`.
+Envelopes vary by command; the tables identify versions and exceptions.
+Some capture-helper errors return unversioned `{"ok":false,"error":"…"}`.
 
 `…` marks omitted fields.
 
@@ -24,7 +22,7 @@ bob capture-parse -f json -- 'Buy milk @dev'
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"schema_version":1,"grammar":31,"input":"Buy milk @dev","body":"Buy milk","mode":"task","route":"dev","section":null,"block_id":null,"needs":[],"spans":[{"start":9,"end":13,"kind":"route"}],"diagnostics":[]}
+{"ok":true,"schema_version":1,"grammar":34,"input":"Buy milk @dev","body":"Buy milk","mode":"task","route":"dev","section":null,"block_id":null,"needs":[],"spans":[{"start":9,"end":13,"kind":"route"}],"diagnostics":[]}
 ```
 
 ```bash
@@ -48,16 +46,15 @@ bob plan -f json -b /path/to/synthetic-vault
 | `bob clipboard` | `-f json` | Read-only selection and provider diagnostics; reports `would_succeed`, the selected provider and entry ages, or a refusal `code` and message. Clipboard text is omitted | `schema_version: 1` | [Capture](../capture.md#clipboard) |
 | `bob capture` | `-f json` | Capture effects and previews, plus optional `snooze: {action, time?, wake_at?, route, block_id, daily_file, row?}`, requirements, drawer, Gmail, and record results | Unversioned (`ok`, no `schema_version`) | [Capture JSON](../capture.md#input-stdin-and-json-output), [capture snooze](#capture-snooze), [task requirements](../task-requirements.md#5-authoring), [Mail-close results](#mail-close-results) |
 | `bob capture-parse` | `-f json` | Modes, spans, diagnostics, and needs (`grammar: 34`); additive `snooze` full-token span, requirement markers, notebook flag, and `goto` | `schema_version: 1` | [Capture parse](../capture.md#bob-capture-parse) |
-| `bob capture-complete` | `-f json` | Contexts, candidates, ranges, pickers, effects, and creation choices; Snooze emits literal `HHMM` replacements | `schema_version: 1` | [Capture completion](../capture.md#bob-capture-complete) |
+| `bob capture-complete` | `-f json` | Contexts, candidates, ranges, pickers, effects, and creation choices; Snooze emits literal `HHMM` replacements. Relation candidates add `dependency_tie: "prerequisite"` or `"dependent"` when applicable; `also_prerequisite` is a deprecated alias for the first | `schema_version: 1` | [Capture completion](../capture.md#bob-capture-complete) |
 | `bob capture-pomodoro-name` | `-f json` | Name write (or `-d` plan) for one open Pomodoro, plus optional `warnings` | `schema_version: 1` | [Capture](../capture.md) |
-| `bob capture-pomodoros` | `-f json` | Ledger entries, `warnings`, `max_task_link_count`, and optional `start_token`. `--tasks` adds `intentions[]`, `headline`, task agendas, `snoozed: {rows[], next_wake_at}`, optional calendar `events`, event chips, off-clock data (`off_clock`, deprecated `untracked`, `clock_source`, `clock_note`), totals, and Event Task buffers. Snoozed rows include `title`, `route`/`block_id`, `target`, zoned `wake_at`, `state`, `notes[]`; matched items add `woke_at`/`snoozed_target`. Agenda `items[].lines[]` add optional `req: {depth, state}` | `schema_version: 1` | [Capture](../capture.md), [Snoozed tasks](../snooze.md), [Pomodoro homes](../pomodoro-homes.md) |
+| `bob capture-pomodoros` | `-f json` | Ledger entries, warnings, link cap, optional `start_token`. `--tasks` adds intentions, headline, task agendas, `snoozed: {rows[], next_wake_at}`, calendar events, clock data, totals, and buffers. Matched agenda items add `woke_at`/`snoozed_target`; `items[].lines[]` add optional `req: {depth, state}` | `schema_version: 1` | [Capture](../capture.md#discovery-commands), [Snoozed tasks](../snooze.md), [Pomodoro homes](../pomodoro-homes.md) |
 | `bob capture-related` | `-f json` | Similar tasks or same-folder records, UTF-8 draft anchors, actions, and already-linked tasks; `--query` ranks titles with scores | `schema_version: 1` | [Capture](../capture.md#bob-capture-related) |
 | `bob capture-rewrite` | `-f json` | `input`, `text`, `changed`, `cursor`, `rule` (including `expand_drawer_marker` and `expand_req_marker`), `edits`, optional `alias`; unchanged cursor requests add `sigil_alias_tip` | `schema_version: 1` | [Capture-rewrite contract](../capture.md#bob-capture-rewrite) |
 | `bob capture-sections` | `-f json` | `route`, `count`, and non-`Tasks` `sections` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-targets` | `-f json` | `bob_dir`, `count`, `targets`; notebook `kind: "notebook"`. Record rows: `kind: "record"`, `type` (album noun), optional `emoji`, `count`. Albums add `title`, `summary`/`owner`, and `breadcrumb` | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md#record-notes) |
 | `bob capture-task-id` | `-f json` | ID write (or `-d` plan) plus `note_path` and picker `*_replacement` strings; notebook notes add `item_kind: "note"` and `parent_replacement: "@nb+ID"` | `schema_version: 1` | [Capture](../capture.md) |
 | `bob capture-drawers` | `-f json` | Whole-bold direct-child drawers plus catalog recents; rows include `marker` (`bold`) and project-note sections use `section` | `schema_version: 1` | [Task drawers](../task-drawers.md) |
-
 | `bob capture-tasks` | `-f json` | Open tasks of one note with block IDs and status names | Unversioned (`ok`, no `schema_version`) | [Capture](../capture.md) |
 | `bob capture-templates list` | `-f json` | Saved-template shelf entries | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
 | `bob capture-templates save` | `-f json` | Saved definition plus shelf position | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
@@ -66,6 +63,10 @@ bob plan -f json -b /path/to/synthetic-vault
 | `bob capture-templates clear` | `-f json` | Cleared count | `schema_version: 1` | [Capture](../capture.md#saved-templates) |
 
 Capture results may carry body-free `gmail: [{url, verdict, thread_id?, note?, link?, date_hint?, message}]` previews; see [Gmail links](../capture.md#gmail-links).
+
+Capture line coordinates refer to the final, settled Markdown, including in
+dry runs. This covers parent, task/section block, open-note, moved-task,
+successor, and jump locations. See [capture output](../capture.md#input-stdin-and-json-output).
 
 ### Capture snooze {#capture-snooze}
 
@@ -83,7 +84,7 @@ bob capture-parse -f json -- 'Ramen Nagi @eat/'
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"schema_version":1,"grammar":31,"input":"Ramen Nagi @eat/","body":"Ramen Nagi","mode":"record_note","route":"eat","needs":["record_value"],"record":{"action":"create","type":"restaurant","label":"Restaurant","dir":"eat","path":"eat/ramen_nagi.md","stem":"ramen_nagi","stem_source":"title","title":"Ramen Nagi","missing":["status","category","location"],"notes":0,"assist_version":1,"fields":[{"key":"status","kind":"choices","required":true,"state":"missing"}]}}
+{"ok":true,"schema_version":1,"grammar":34,"input":"Ramen Nagi @eat/","body":"Ramen Nagi","mode":"record_note","route":"eat","needs":["record_value"],"record":{"action":"create","type":"restaurant","label":"Restaurant","dir":"eat","path":"eat/ramen_nagi.md","stem":"ramen_nagi","stem_source":"title","title":"Ramen Nagi","missing":["status","category","location"],"notes":0,"assist_version":1,"fields":[{"key":"status","kind":"choices","required":true,"state":"missing"}]}}
 ```
 
 Existing `@eat/ninja_sushi` is `record_update` (`stem_source: "existing"`). Fields
@@ -126,7 +127,7 @@ bob capture-complete -n -c 16 -f json -- 'Ramen Nagi @eat/'
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"schema_version":1,"grammar":31,"cursor":16,"context":"record_value","record":{"type":"restaurant","dir":"eat","label":"Restaurant","field":"status","assist_version":1},"candidates":[{"replacement":"\n- status:: liked","value":"liked","display":"💚 Liked","kind":"choices","cursor_after":33,"continuation":{"cursor":33,"next_missing_field":true}}]}
+{"ok":true,"schema_version":1,"grammar":34,"cursor":16,"context":"record_value","record":{"type":"restaurant","dir":"eat","label":"Restaurant","field":"status","assist_version":1},"candidates":[{"replacement":"\n- status:: liked","value":"liked","display":"💚 Liked","kind":"choices","cursor_after":33,"continuation":{"cursor":33,"next_missing_field":true}}]}
 ```
 
 Accepting inserts `- status:: liked`. `-n` walks remaining required fields.
@@ -137,7 +138,7 @@ bob capture-complete -F visited -c 16 -f json -- 'Ramen Nagi @eat/'
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"schema_version":1,"grammar":31,"cursor":16,"context":"record_value","record":{"type":"restaurant","dir":"eat","label":"Restaurant","field":"visited","assist_version":1,"edit":{"replacement_range":{"start":16,"end":16},"replacement":"\n- visited:: ","cursor_after":29,"continuation":{"cursor":29,"next_missing_field":false}}},"candidates":[{"replacement":"\n- visited:: today","value":"today","display":"today","kind":"date","cursor_after":34}]}
+{"ok":true,"schema_version":1,"grammar":34,"cursor":16,"context":"record_value","record":{"type":"restaurant","dir":"eat","label":"Restaurant","field":"visited","assist_version":1,"edit":{"replacement_range":{"start":16,"end":16},"replacement":"\n- visited:: ","cursor_after":29,"continuation":{"cursor":29,"next_missing_field":false}}},"candidates":[{"replacement":"\n- visited:: today","value":"today","display":"today","kind":"date","cursor_after":34}]}
 ```
 
 `@` inserts `eat/ ` (`kind: "record"`). Empty `@eat#` expands `replacement`
@@ -148,7 +149,7 @@ bob capture-complete -c 5 -f json -- '@eat#'
 ```
 
 ```text { .no-copy title="Output (selected fields)" }
-{"ok":true,"schema_version":1,"grammar":31,"cursor":5,"replacement":{"start":0,"end":5},"context":"section","candidates":[{"kind":"record_create","replacement":"@eat/ ","label":"🍽️ New restaurant · eat/","route":"eat/","type":"restaurant","cursor_after":6,"continuation":{"cursor":6,"next_missing_field":true}},{"replacement":"@eat#Ideas","title":"Ideas","level":1}]}
+{"ok":true,"schema_version":1,"grammar":34,"cursor":5,"replacement":{"start":0,"end":5},"context":"section","candidates":[{"kind":"record_create","replacement":"@eat/ ","label":"🍽️ New restaurant · eat/","route":"eat/","type":"restaurant","cursor_after":6,"continuation":{"cursor":6,"next_missing_field":true}},{"replacement":"@eat#Ideas","title":"Ideas","level":1}]}
 ```
 
 Near-spellings warn `record_value_near` with no rewrite. Parse reports
@@ -496,9 +497,11 @@ capture unversioned).
 | `bob task reroll` (alias `randomize`) | `-f json` | Re-roll plan and per-task outcomes | `schema_version: 1` | [Randomize](../randomize.md) |
 | `bob query` | `-f json` (default is `paths`) | `engine`, `query_kind`, `format`, `paths`, `result`, and `warnings` | Unversioned (no `schema_version`) | [Bob query](../dataview.md) |
 | `bob snooze` (`list`, `add`, `drop`, `wake`) | `-f json` | Queue rows (including `wake_notice_eligible`), add/drop results, and wake batches; list includes `wake_notice_version: 1` and canonical `vault_root`; wake receipts record the selected notification channel and vault identity | `schema_version: 1` | [Snoozed tasks](../snooze.md#cli) |
-| `bob prose format` (legacy alias `bob articles format`) | `-f json` | Prose-note plans | `schema_version: 1` | [Prose notes](../prose.md) |
-| `bob prose list` (legacy alias `bob articles list`) | `-f json` | Prose notes needing work | `schema_version: 1` | [Prose notes](../prose.md) |
-| `bob prose outline` (legacy alias `bob articles outline`) | `-f json` | Section outline of one prose note | `schema_version: 1` | [Prose notes](../prose.md) |
+| `bob prose format`, `bob prose adopt` | `-f json` | ArticlePlan: `notes[]` with edits and findings, plus `summary.articles`; adopt previews unless `-w` | `schema_version: 1` | [Prose JSON](../prose.md#json-articleplan-v1) |
+| `bob prose list` | `-f json` | ArticlePlan without each note's `edits` | `schema_version: 1` | [Prose JSON](../prose.md#json-articleplan-v1) |
+| `bob prose outline` | `-f json` | `title`, `numbering`, `words`, `preamble`, and `sections[]` | Unversioned (no `ok` or `schema_version`) | [Prose JSON](../prose.md#json-articleplan-v1) |
+
+`bob articles` is an alias for `bob prose`, with the same outputs.
 
 `bob nightly` is human-only in this checkout: it exposes
 no `--format json` or `--json` flag.

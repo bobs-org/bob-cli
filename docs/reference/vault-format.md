@@ -5,14 +5,11 @@ description: Task-line anatomy, lanes, fields, and the note types that make up a
 
 # Vault format
 
-A Bob vault is an Obsidian Markdown folder. Tasks use `#task` checkboxes;
-Today comes from the Pomodoro ledger. This page lists stored forms; behavior
-contracts own the rules.
+A Bob vault is an Obsidian Markdown folder. This page lists stored forms;
+linked contracts specify behavior.
 
-Examples use a synthetic vault and `BOB_NOW=2026-10-20`. Default paths are
-relative to `BOB_DIR` (`~/bob` unless you set it or pass `--bob-dir`). Copy
-the bundled demo with the [first Bob day tutorial](../start/first-bob-day.md)
-when you need that fixture.
+Examples use `BOB_NOW=2026-10-20`. Paths are relative to `BOB_DIR` (default
+`~/bob`, overridden by `--bob-dir`). See the [demo tutorial](../start/first-bob-day.md).
 
 ## Task-line anatomy
 
@@ -46,8 +43,7 @@ block ID is last. The `[type::]` (`[theme::]` legacy) and `[root::]` fields
 sit before the trailing metadata run (other fields, tags, `^id`); freshness
 stamps land after them.
 
-Verified capture of a new blocked dependent (spacing is what `bob capture`
-wrote):
+Captured blocked dependent:
 
 ```bob-task
 - [?] #task Review the intake queue [created::2026-10-20] [id:: work__queue] [dependsOn:: work__prep] ^queue
@@ -137,7 +133,7 @@ the source of truth.
 	- ⛓️ **DEPENDS ON:** [[#^prep]]
 ```
 
-The prerequisite's generated mirror (never read back as input):
+Generated mirror (not an input):
 
 ```markdown
 - [ ] #task Prep the intake [created::2026-10-20] [id:: work__prep] ^prep
@@ -148,8 +144,7 @@ Writer form: `⛓️` (U+26D3 U+FE0F), space, `**DEPENDS ON:**`, space, then
 plain Task Links joined by ` • `. No aliases, embeds, or strikes. An empty
 list deletes the line and the field.
 
-A task's directed relations live on one authored line, with a generated
-mirror maintained by reconcile:
+Directed relations use an authored line and a generated mirror:
 
 ```markdown
 - [ ] #task Fix flaky capture retries ^fix-retries
@@ -198,8 +193,6 @@ time. Existing date-only entries are never backfilled.
 Contract: [Task dependency links](../task-dependencies.md).
 
 ## Lane, freshness, and Today
-
-These three readings share a task line and mean different things.
 
 | Reading | What it is | Stored as |
 | --- | --- | --- |

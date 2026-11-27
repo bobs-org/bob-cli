@@ -471,9 +471,9 @@ Contract: [Starting the session atomically](../capture.md#starting-the-session-a
 
 ### `@route:block-id` with no other text {#link-existing}
 
-Link the existing `^block-id` task in `route.md` into today's ledger. No
-task is created. A task Blocked only by its own prerequisites drops those
-links first, then the gesture runs. `=<X>` starts the resolved session.
+Link an existing task into today's ledger; `=<X>` also starts the session.
+Its own prerequisites are dropped if they alone block it. Child bullets file
+notes and drawers under the task, or in `## Notes` for `^prj`.
 
 ```bash
 bob capture '@work:outline'
@@ -489,7 +489,7 @@ bob capture '@work:outline'
 - [*] #task Write an outline [fresh:: 2026-10-20] [created::2026-10-20] ^outline
 ```
 
-The Task Link is a dedicated child under the open Pomodoro:
+The ledger receives a dedicated Task Link:
 
 ```markdown
 - [ ] () — WORK
@@ -949,10 +949,9 @@ bob capture --dry-run '=#"DEEP WORK"'
 bob capture --dry-run '@work:outline#"DEEP WORK"'
 ```
 
-The inner double quotes are part of Bob's syntax; the outer single quotes
-preserve them in the shell. The `#` is required: `'="DEEP WORK"'` captures
-prose. Completion uses exact literals when a slug would lose the spelling
-or select a different name.
+Single shell quotes preserve Bob's double quotes. The `#` is required:
+`'="DEEP WORK"'` captures prose. Completion uses literals when slugs would
+lose spelling or select another name.
 
 Contract: [Starting a named Pomodoro](../capture.md#starting-a-named-pomodoro)
 and [Lossless acceptance](../task-types.md#pt8-lossless-acceptance).
@@ -1473,7 +1472,14 @@ Contract: [Scheduling and priority](../capture.md#scheduling-and-priority).
 
 ### `z:<when>` {#z-snooze}
 
-`z:<when>`: future same-day time; see the [contract](../capture.md#capture-snooze).
+`z:<when>` plans work for later today; `@route:id!` drops the snooze.
+See [time forms and restrictions](../capture.md#capture-snooze).
+
+```bash
+bob capture --dry-run '@work:outline z:1530'
+bob capture --dry-run 'Review the draft @work z:+45m'
+bob capture --dry-run '@work:outline!'
+```
 
 ### `$` / `$<N>` {#dollar-priority}
 
