@@ -442,6 +442,10 @@ before aliases or the file stem; optional one-line `summary:` supplies its dek.
 The formatter leaves both properties untouched. See [Prose notes](../prose.md)
 and the [Prose Card](https://bobs-org.github.io/reference/plugins/prose-card/).
 
+Extracted prose notes record `extracted_from: "[[owner]]"` and
+`extracted_heading:`; `inline` absorbs both. A note without provenance inlines only
+into a hand-written stub. See [Prose sections](../prose.md#prose-sections-extract-and-inline).
+
 ### Album notes
 
 An album is a vault-root note with `type: "[[album]]"`. Its stem is the

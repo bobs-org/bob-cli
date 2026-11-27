@@ -32,7 +32,7 @@ queued intake; full scans also synchronize annotations. The
 <!-- BEGIN GENERATED: contract table -->
 | Guide | What it covers |
 | --- | --- |
-| [prose.md](prose.md) | `bob prose` formatting, list, outline, adopt, and ArticlePlan JSON; `bob articles` remains an alias |
+| [prose.md](prose.md) | `bob prose` formatting, list, outline, adopt, extract, inline, and ArticlePlan/ProseConversion JSON; `bob articles` remains an alias |
 | [capture.md](capture.md) | Capture grammar, JSON, and picker commands (`bob capture`, parse, complete, discovery) |
 | [completion.md](completion.md) | Shell completion: the runtime model, protocol 1, and what completes |
 | [dataview.md](dataview.md) | `bob query` Dataview and Tasks |

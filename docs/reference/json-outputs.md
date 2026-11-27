@@ -500,6 +500,7 @@ capture unversioned).
 | `bob prose format`, `bob prose adopt` | `-f json` | ArticlePlan: `notes[]` with edits and findings, plus `summary.articles`; adopt previews unless `-w` | `schema_version: 1` | [Prose JSON](../prose.md#json-articleplan-v1) |
 | `bob prose list` | `-f json` | ArticlePlan without each note's `edits` | `schema_version: 1` | [Prose JSON](../prose.md#json-articleplan-v1) |
 | `bob prose outline` | `-f json` | `title`, `numbering`, `words`, `preamble`, and `sections[]` | Unversioned (no `ok` or `schema_version`) | [Prose JSON](../prose.md#json-articleplan-v1) |
+| `bob prose extract`, `inline` | `-f json` | ProseConversion; preview unless `-w` | `schema_version: 1` | [ProseConversion](../prose.md#json-proseconversion-v1) |
 
 `bob articles` is an alias for `bob prose`, with the same outputs.
 

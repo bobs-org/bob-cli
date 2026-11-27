@@ -26,6 +26,10 @@ Probes:
                        temp directory; the real vault and state are untouched
   prose-type-read      bob prose outline reads a [[prose]] note in a throwaway
                        vault under the host's temp directory
+  prose-extract-preview
+                       bob prose extract previews moving ## Intro out of an
+                       area note in a throwaway vault under the host's
+                       temp directory
 
 Hosts are queried through the configured Tailscale SSH aliases athena, apollo,
 and mac. Each SSH attempt is limited to 10 seconds. An unreachable host is
@@ -120,6 +124,27 @@ esac
 exit 1
 PROBE
             ;;
+        prose-extract-preview)
+            cat <<'PROBE'
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/bob-host-currency.XXXXXX") || exit 1
+trap 'rm -rf "$tmp"' EXIT
+vault=$tmp/vault
+mkdir -p "$vault" || exit 1
+printf '%s\n' '---' 'parent: "[[sase_blog]]"' 'type: "[[area]]"' \
+    'created: 2026-01-01T00:00:00-05:00' 'title: "Probe"' '---' '' \
+    '# Tasks' '' '- [ ] #task probe' '' '## Intro' 'Body' \
+    >"$vault/probe.md" || exit 1
+out=$(BOB_CONFIG_FILE="$tmp/missing-config.toml" BOB_DIR="$vault" \
+    XDG_STATE_HOME="$tmp/state" XDG_CACHE_HOME="$tmp/cache" \
+    BOB_VAULT_SYNC_LOCK_FILE="$tmp/sync.lock" BOB_VAULT_SYNC_NOTIFY=0 \
+    BOB_REF_JOBS_KICK=off BOB_GMAIL_KICK=off \
+    bob prose extract -b "$vault" probe -s Intro -f json 2>/dev/null) || exit 1
+case $out in
+    *'"status":"preview"'*) exit 0 ;;
+esac
+exit 1
+PROBE
+            ;;
         *)
             return 1
             ;;
@@ -130,12 +155,13 @@ probe_detail() {
     case "$1" in
         bold-drawer-read) printf 'capture-drawers lists **API Design** as marker=bold' ;;
         prose-type-read) printf 'bob prose outline lists Intro from a [[prose]] note' ;;
+        prose-extract-preview) printf 'bob prose extract previews ## Intro out of an area note' ;;
     esac
 }
 
 for probe in "${probes[@]}"; do
     if ! probe_body "$probe" >/dev/null; then
-        printf 'Unknown probe: %s (known: bold-drawer-read prose-type-read)\n' "$probe" >&2
+        printf 'Unknown probe: %s (known: bold-drawer-read prose-type-read prose-extract-preview)\n' "$probe" >&2
         exit 2
     fi
 done
