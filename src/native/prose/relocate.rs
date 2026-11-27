@@ -98,7 +98,23 @@ impl RelocationMap {
         child_stem: &str,
         child_text: &str,
     ) -> Self {
-        let mut map = Self::new(section, child_stem);
+        let child_path = section
+            .path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .join(format!("{child_stem}.md"));
+        Self::for_inline_path(section, &child_path, child_text)
+    }
+
+    /// Build the inverse map when the prose note is not beside its parent.
+    pub(crate) fn for_inline_path(
+        section: &ProseSection<'_>,
+        child_path: &Path,
+        child_text: &str,
+    ) -> Self {
+        let child_stem = path_stem(child_path).unwrap_or_default();
+        let mut map = Self::new(section, &child_stem);
+        map.child = child_path.to_path_buf();
         let owner_doc = scan::classify(section.text);
         let child_doc = scan::classify(child_text);
         let child_numbering = plan_headings(&child_doc.lines, false);

@@ -1,7 +1,7 @@
-//! Extract planner and hidden `bob prose extract`.
+//! Extract planner and `bob prose extract`.
 //!
 //! Implements X1–X7 on top of `section_model` and `relocate`: the
-//! ProseConversion v1 JSON types, the fingerprint (W2), and a hidden CLI
+//! ProseConversion v1 JSON types, the fingerprint (W2), and the CLI
 //! that writes through `vault_rewrite`.
 
 use std::{
@@ -791,48 +791,21 @@ pub(crate) fn plan_extract(
         host_findings_extra = host_plan.findings;
         host_after = host_plan.formatted.clone().unwrap_or(host_after);
     }
-    // Verify the stub classifies as stub-section.
-    {
-        let after_section = section_model::select_section(
-            &host_path,
-            &host_after,
-            section_model::Selector::Section(&prose_section.identity),
-            |_| None,
-        );
-        match after_section {
-            Err(refusal) if refusal.code == "stub-section" => {}
-            _ => {
-                // Fall back to the syntactic check when identity matching
-                // drifts (for example numbering rewrote the heading).
-                let headings_doc = scan::classify(&host_after);
-                let mut found_stub = false;
-                // Re-select by line: the kept heading line still holds.
-                if let Ok(kept) = section_model::select_section(
-                    &host_path,
-                    &host_after,
-                    section_model::Selector::Line(prose_section.heading_line),
-                    |_| None,
-                ) && section_model::stub_target(&kept).is_some()
-                {
-                    found_stub = true;
-                }
-                let _ = headings_doc;
-                if !found_stub {
-                    return Err(ExtractRefusal {
-                        code: "verify_failed".to_string(),
-                        message:
-                            "extracted stub did not classify as stub-section"
-                                .to_string(),
-                        hint: "Retry the extraction".to_string(),
-                        path: Some(host_path.clone()),
-                        line: Some(prose_section.heading_line),
-                        next: None,
-                        section: None,
-                        target: None,
-                    });
-                }
-            }
-        }
+    // Verify the planned link remains under a heading after formatting. A
+    // prose host formatter can move that heading, so verify the generated
+    // target across sections instead of reusing its pre-format line number.
+    if !has_extracted_stub(&host_path, &host_after, &stem) {
+        return Err(ExtractRefusal {
+            code: "verify_failed".to_string(),
+            message: "extracted stub did not classify as stub-section"
+                .to_string(),
+            hint: "Retry the extraction".to_string(),
+            path: Some(host_path.clone()),
+            line: Some(prose_section.heading_line),
+            next: None,
+            section: None,
+            target: None,
+        });
     }
     // Collect linker rewrites (everything except host).
     let mut linker_files: Vec<(PathBuf, String, String)> = Vec::new();
@@ -1034,7 +1007,10 @@ fn build_host_after(
     )
 }
 
-fn report_for_preview(plan: &ExtractPlan, host_arg: &str) -> ConversionReport {
+pub(crate) fn report_for_preview(
+    plan: &ExtractPlan,
+    host_arg: &str,
+) -> ConversionReport {
     let host_rel = display_relative(&plan.host_path);
     let new_rel = display_relative(&plan.new_path);
     let mut changes = Vec::new();
@@ -1162,12 +1138,14 @@ fn empty_fingerprint() -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OutputFormat {
+pub(crate) enum OutputFormat {
     Human,
     Json,
 }
 
-fn output_format_from_matches(matches: &clap::ArgMatches) -> OutputFormat {
+pub(crate) fn output_format_from_matches(
+    matches: &clap::ArgMatches,
+) -> OutputFormat {
     match matches
         .get_one::<String>("format")
         .map(String::as_str)
@@ -1325,7 +1303,7 @@ pub(crate) fn run_extract(matches: &clap::ArgMatches) -> i32 {
             let verify_host_after = fresh.host_after.clone();
             let verify_new = fresh.new_path.clone();
             let verify_new_after = fresh.new_contents.clone();
-            let verify_section_line = fresh.section_line;
+            let verify_new_stem = fresh.new_stem.clone();
             Ok(vault_rewrite::ReadyPlan {
                 files,
                 subject,
@@ -1337,7 +1315,7 @@ pub(crate) fn run_extract(matches: &clap::ArgMatches) -> i32 {
                         &verify_host_after,
                         &verify_new,
                         &verify_new_after,
-                        verify_section_line,
+                        &verify_new_stem,
                     )
                 }),
                 on_committed: Box::new(|| {}),
@@ -1377,7 +1355,7 @@ pub(crate) fn run_extract(matches: &clap::ArgMatches) -> i32 {
                     );
                 }
                 OutputFormat::Human => {
-                    print_written(&report);
+                    print_written(&report, format);
                 }
             }
             0
@@ -1432,7 +1410,7 @@ fn print_refusal(
     2
 }
 
-fn print_preview(report: &ConversionReport, format: OutputFormat) {
+pub(crate) fn print_preview(report: &ConversionReport, format: OutputFormat) {
     match format {
         OutputFormat::Json => {
             println!("{}", serde_json::to_string(report).unwrap_or_default());
@@ -1483,20 +1461,27 @@ fn print_preview(report: &ConversionReport, format: OutputFormat) {
     }
 }
 
-fn print_written(report: &ConversionReport) {
-    use crate::native::style::Styler;
-    let styler = Styler::detect();
-    println!("{} {}", styler.green("✓"), report.notice);
-    if let Some(commit) = &report.commit {
-        println!("  committed {} {}", commit.sha, commit.subject);
-    }
-    if report.sync.post == "failed" {
-        println!("  sync pending");
-    } else if report.sync.post == "ok" {
-        println!("  extracted locally; sync {}", report.sync.post);
-    }
-    for warning in &report.warnings {
-        eprintln!("{}: {warning}", styler.warning_prefix());
+pub(crate) fn print_written(report: &ConversionReport, format: OutputFormat) {
+    match format {
+        OutputFormat::Json => {
+            println!("{}", serde_json::to_string(report).unwrap_or_default());
+        }
+        OutputFormat::Human => {
+            use crate::native::style::Styler;
+            let styler = Styler::detect();
+            println!("{} {}", styler.green("✓"), report.notice);
+            if let Some(commit) = &report.commit {
+                println!("  committed {} {}", commit.sha, commit.subject);
+            }
+            if report.sync.post == "failed" {
+                println!("  sync pending");
+            } else if report.sync.post == "ok" {
+                println!("  extracted locally; sync {}", report.sync.post);
+            }
+            for warning in &report.warnings {
+                eprintln!("{}: {warning}", styler.warning_prefix());
+            }
+        }
     }
 }
 
@@ -1506,7 +1491,7 @@ fn verify_written(
     host_after: &str,
     new_path: &Path,
     new_after: &str,
-    heading_line: usize,
+    new_stem: &str,
 ) -> Result<(), String> {
     let live_host =
         fs::read_to_string(root.join(host_path)).map_err(|error| {
@@ -1528,15 +1513,9 @@ fn verify_written(
             display_relative(new_path)
         ));
     }
-    // The written stub must classify as stub-section.
-    let kept = section_model::select_section(
-        host_path,
-        &live_host,
-        section_model::Selector::Line(heading_line),
-        |_| None,
-    )
-    .map_err(|error| format!("stub check failed: {}", error.message))?;
-    if section_model::stub_target(&kept).is_none() {
+    // The written stub must classify as stub-section. Formatting a prose
+    // host can move the heading, so verify the generated target directly.
+    if !has_extracted_stub(host_path, &live_host, new_stem) {
         return Err(
             "extracted stub did not classify as stub-section".to_string()
         );
@@ -1548,4 +1527,17 @@ fn verify_written(
         return Err("new note is not idempotent".to_string());
     }
     Ok(())
+}
+
+fn has_extracted_stub(
+    host_path: &Path,
+    host_text: &str,
+    new_stem: &str,
+) -> bool {
+    section_model::all_sections(host_path, host_text).is_ok_and(|sections| {
+        sections.iter().any(|section| {
+            section_model::stub_target(section)
+                .is_some_and(|stub| stub.target == new_stem)
+        })
+    })
 }

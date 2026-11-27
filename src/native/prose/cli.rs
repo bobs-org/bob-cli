@@ -42,6 +42,9 @@ pub(crate) fn run(args: Vec<OsString>) -> i32 {
             super::convert::extract::run_extract(sub_matches)
         }
         Some(("format", sub_matches)) => run_format(sub_matches),
+        Some(("inline", sub_matches)) => {
+            super::convert::inline::run_inline(sub_matches)
+        }
         Some(("list", sub_matches)) => run_list(sub_matches),
         Some(("outline", sub_matches)) => run_outline(sub_matches),
         Some((name, _)) => {
@@ -59,11 +62,13 @@ pub(crate) fn build_cli() -> ClapCommand {
             "Format, inspect, extract, and inline prose notes (frontmatter type: \"[[prose]]\").\n\n\
              Every `bob prose` command reads or rewrites prose notes. `[[article]]` \
              notes still count. bob owns their section numbers (1. / 1.1 / 1.1.1) \
-             and layout; formatting never changes a word. Bare `bob prose` runs \
-             the read-only `list` command.",
+             and layout; formatting never changes a word. `extract` moves an authored \
+             heading section into a prose note, and `inline` folds it back through its \
+             unique link stub. Both preview before writing. Bare `bob prose` runs the \
+             read-only `list` command.",
         )
         .after_help(
-            "Examples:\n  bob prose                                      List prose notes\n  bob prose adopt sase_blog_contents             Preview adopting a note\n  bob prose adopt -w sase_blog_contents          Adopt it\n  bob prose format sase_blog_contents            Format one prose note\n  bob prose format -n off sase_blog_contents     Turn section numbers off\n  bob prose format -a -c                         Check all prose notes\n  bob prose outline sase_blog_contents           Numbered outline with word counts\n\nSee docs/prose.md for the rules and JSON contract.",
+            "Examples:\n  bob prose                                      List prose notes\n  bob prose adopt blog                          Preview adopting a note\n  bob prose extract job_2026 -s \"Why I left Google?\"  Preview extracting a section\n  bob prose inline job_2026_why_i_left_google    Preview inlining it\n  bob prose format blog                         Format one prose note\n  bob prose outline blog                        Numbered outline with word counts\n\nSee docs/prose.md for the rules and JSON contract.",
         )
         .arg(bob_dir_arg())
         .arg(format_arg())
@@ -72,6 +77,7 @@ pub(crate) fn build_cli() -> ClapCommand {
         .subcommand(adopt_command())
         .subcommand(extract_command())
         .subcommand(format_command())
+        .subcommand(inline_command())
         .subcommand(list_command())
         .subcommand(outline_command())
 }
@@ -111,7 +117,6 @@ fn extract_command() -> ClapCommand {
         .after_help(
             "Examples:\n  bob prose extract job_2026 -s \"Why I left Google?\"\n  bob prose extract job_2026 -l 31 -f json\n  bob prose extract job_2026 -s Intro -n custom_stem -w -o\n\nExit codes:\n  0 preview or write\n  2 refusal, usage error, or write failure",
         )
-        .hide(true)
         .group(
             ArgGroup::new("selector")
                 .args(["section", "line"])
@@ -129,6 +134,31 @@ fn extract_command() -> ClapCommand {
         .arg(note_arg_with_help(
             false,
             "Vault-relative Markdown path or unique note stem to extract from",
+        ))
+}
+
+fn inline_command() -> ClapCommand {
+    ClapCommand::new("inline")
+        .about("Fold a prose note back into its parent section")
+        .long_about(
+            "Inline a prose note into the unique section in its parent that links to it. \
+             The note must have no child notes, unsupported frontmatter, or conflicting \
+             heading or block identities. Previews by default with a unified diff per \
+             file; pass --write to apply through one verified commit. Online writes need \
+             -b/--bob-dir and BOB_DIR to resolve to the same vault; a mismatch refuses \
+             before locks or sync.",
+        )
+        .after_help(
+            "Examples:\n  bob prose inline job_2026_why_i_left_google\n  bob prose inline letter_to_maya -w -o -f json\n\nExit codes:\n  0 preview or write\n  2 refusal, usage error, or write failure",
+        )
+        .arg(bob_dir_arg())
+        .arg(expect_arg())
+        .arg(format_arg())
+        .arg(offline_arg())
+        .arg(inline_write_arg())
+        .arg(note_arg_with_help(
+            false,
+            "Vault-relative prose-note path or unique note stem to inline",
         ))
 }
 
@@ -294,6 +324,14 @@ fn extract_write_arg() -> Arg {
         .long("write")
         .action(ArgAction::SetTrue)
         .help("Write the extraction through one verified commit; preview without this flag")
+}
+
+fn inline_write_arg() -> Arg {
+    Arg::new("write")
+        .short('w')
+        .long("write")
+        .action(ArgAction::SetTrue)
+        .help("Write the inline through one verified commit; preview without this flag")
 }
 
 fn write_arg() -> Arg {

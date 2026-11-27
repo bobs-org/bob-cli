@@ -1,6 +1,7 @@
 //! Prose-section conversion shared types.
 //!
-//! The extract planner owns ProseConversion v1 for `bob prose extract`.
-//! The inline phase adds `inline.rs` and unhides both commands.
+//! ProseConversion v1 plans for extracting sections to prose notes and
+//! inlining them back into their parent notes.
 
 pub(crate) mod extract;
+pub(crate) mod inline;

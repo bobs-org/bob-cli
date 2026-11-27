@@ -626,6 +626,72 @@ fn adopt_stdin_json_returns_plan_without_writing() {
 }
 
 #[test]
+fn inline_json_previews_parent_update_and_child_trash_without_writing() {
+    let fixture = fixture();
+    let parent = "---\ntype: \"[[area]]\"\n---\n\n## Topic\n\n- [[notes/draft|Topic]]\n\n## Other\n\nKeep this text.\n";
+    let child = "---\nparent: \"[[owner]]\"\ntype: \"[[prose]]\"\ncreated: 2026-11-27\ntitle: Topic\nsection_numbers: false\n---\n\n## Detail\n\nRestored prose.\n";
+    write_file(&fixture.vault.join("owner.md"), parent);
+    write_file(&fixture.vault.join("notes/draft.md"), child);
+
+    let output = prose_command(&fixture)
+        .args(["inline", "draft", "-f", "json"])
+        .output()
+        .expect("preview prose inline");
+
+    assert_success(&output);
+    let report = json(&output);
+    assert_eq!(report["contract"], "prose-conversion");
+    assert_eq!(report["command"], "inline");
+    assert_eq!(report["status"], "preview");
+    assert_eq!(report["target"]["path"], "owner.md");
+    assert!(report["changes"].as_array().unwrap().iter().any(|change| {
+        change["path"] == "notes/draft.md" && change["action"] == "trash"
+    }));
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("owner.md")).unwrap(),
+        parent
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.vault.join("notes/draft.md")).unwrap(),
+        child
+    );
+}
+
+#[test]
+fn inline_offline_write_trashes_child_and_commits_parent() {
+    let fixture = fixture();
+    let parent = "---\ntype: \"[[area]]\"\n---\n\n## Topic\n\n- [[notes/draft|Topic]]\n\n## Other\n\nKeep this text.\n";
+    let child = "---\nparent: \"[[owner]]\"\ntype: \"[[prose]]\"\ncreated: 2026-11-27\ntitle: Topic\nsection_numbers: false\n---\n\n## Detail\n\nRestored prose.\n";
+    write_file(&fixture.vault.join("owner.md"), parent);
+    write_file(&fixture.vault.join("notes/draft.md"), child);
+    git_in(&fixture.vault, ["init", "-q"]);
+    git_in(&fixture.vault, ["config", "user.email", "t@t"]);
+    git_in(&fixture.vault, ["config", "user.name", "t"]);
+    git_in(&fixture.vault, ["add", "-A"]);
+    git_in(&fixture.vault, ["commit", "-qm", "seed"]);
+
+    let output = prose_command(&fixture)
+        .args(["inline", "draft", "-w", "-o", "-f", "json"])
+        .output()
+        .expect("write prose inline offline");
+
+    assert_success(&output);
+    let report = json(&output);
+    assert_eq!(report["status"], "written");
+    assert_eq!(report["command"], "inline");
+    assert!(report["commit"]["sha"].as_str().is_some());
+    let written = fs::read_to_string(fixture.vault.join("owner.md")).unwrap();
+    assert!(written.contains("### Detail"), "{written}");
+    assert!(written.contains("Restored prose."), "{written}");
+    assert!(!fixture.vault.join("notes/draft.md").exists());
+    assert!(fixture.vault.join(".trash").exists());
+    assert!(
+        stdout(&git_in(&fixture.vault, ["log", "-1", "--format=%s"]))
+            .contains("bob prose inline: draft → owner § Topic")
+    );
+}
+
+#[test]
 fn adopt_refuses_other_types_and_tasks() {
     let fixture = fixture();
     write_file(

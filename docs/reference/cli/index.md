@@ -98,7 +98,7 @@ Every `bob` command, generated from the same help text `bob --help` prints.
 | [`bob props`](props.md) | Show and edit frontmatter properties for one note |
 | [`bob props show`](props.md#bob-props-show) | Show ordered frontmatter properties for one note |
 | [`bob props update`](props.md#bob-props-update) | Apply a guarded property edit to one note |
-| [`bob prose`](prose.md) | Format and inspect prose notes with bob-owned section numbers |
+| [`bob prose`](prose.md) | Format, inspect, extract, and inline prose notes |
 | [`bob query`](query.md) | Run Dataview or Tasks queries against the vault |
 | [`bob records`](records.md) | List, inspect, check, create, update, and tidy Record Notes |
 | [`bob records check`](records.md#bob-records-check) | Check Record Notes against their album schemas |
@@ -200,7 +200,7 @@ Vault:
   notebooks    Inspect or maintain notebook notes
   periods      Manage period notes: weeks, quarters, years, and all time
   props        Show and edit frontmatter properties for one note
-  prose        Format and inspect prose notes with bob-owned section numbers
+  prose        Format, inspect, extract, and inline prose notes
   query        Run Dataview or Tasks queries against the vault
   records      List, inspect, check, create, update, and tidy Record Notes
   ref          Find, list, read, rename, and plan references for today; sync

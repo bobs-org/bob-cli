@@ -145,7 +145,17 @@ const TABLE: &[Entry] = &[
         kind: Kind::VaultNote,
     },
     Entry {
+        path: &["prose", "extract"],
+        arg: "note",
+        kind: Kind::VaultNote,
+    },
+    Entry {
         path: &["prose", "format"],
+        arg: "note",
+        kind: Kind::ProseNote,
+    },
+    Entry {
+        path: &["prose", "inline"],
         arg: "note",
         kind: Kind::ProseNote,
     },

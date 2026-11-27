@@ -202,6 +202,24 @@ where
     )
 }
 
+/// Return every heading section in an eligible prose host. Conversion's
+/// inverse uses this to find the one section whose body is a stub for a
+/// particular prose note; ordinary extraction still goes through the full
+/// selector and eligibility checks above.
+pub(crate) fn all_sections<'a>(
+    path: &Path,
+    text: &'a str,
+) -> Result<Vec<ProseSection<'a>>, SectionRefusal> {
+    let document = scan::classify(text);
+    let host_kind = classify_host(path, text)?;
+    let headings = collect_headings(&document);
+    Ok((0..headings.len())
+        .map(|index| {
+            make_section(path, text, host_kind, index, &headings, &document)
+        })
+        .collect())
+}
+
 fn select_classified<'a, F>(
     path: &Path,
     text: &'a str,
@@ -337,7 +355,10 @@ where
     Ok(section)
 }
 
-fn classify_host(path: &Path, text: &str) -> Result<HostKind, SectionRefusal> {
+pub(crate) fn classify_host(
+    path: &Path,
+    text: &str,
+) -> Result<HostKind, SectionRefusal> {
     if excluded_host_path(path) {
         return Err(not_host_note());
     }

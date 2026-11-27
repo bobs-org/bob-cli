@@ -1351,7 +1351,7 @@ const SUBCOMMANDS: &[Subcommand] = &[
     },
     Subcommand {
         name: "prose",
-        about: "Format and inspect prose notes with bob-owned section numbers",
+        about: "Format, inspect, extract, and inline prose notes",
         section: Section::Vault,
         target: Target::Leaf(Leaf {
             native_command: NativeCommand::Prose,
