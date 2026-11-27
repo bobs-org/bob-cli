@@ -435,9 +435,11 @@ data time, and a ↻ refresh button. An empty board says `Nothing queued ✓`.
 The four lanes sit in a row on wide panes, two by two at readable line width,
 and in one column below that.
 
-Awake cards show the title, a kind and topic line (kind from the `refs.base`
-category vocabulary, topic from `parent`), the added date, `♫` for audio, `✎ N`
-for annotations, and the task priority mark. A `TODAY` pill appears only when
+Awake cards show the title, a kind and topic line (the kind word and emoji
+from the ref vocabulary the
+[Ref Card](https://bobs-org.github.io/reference/plugins/ref-card/) also uses,
+the topic from `parent`), the added date, `♫` for audio, `✎ N` for
+annotations, and the task priority mark. A `TODAY` pill appears only when
 the reading task is linked under today's Pomodoros and the Today cache is
 ready. A dim `*` marks a pending frontmatter sync. Cards linked today sort
 first; otherwise the order is `bob ref list` order.
