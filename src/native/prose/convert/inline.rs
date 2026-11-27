@@ -757,16 +757,18 @@ fn plan_inline(
 
     let mut links = links_from(&child_path, child_rewrite.links);
     links.extend(links_from(&parent_path, parent_rewrite.links));
-    links.extend(vault_links.links.iter().filter_map(|link| {
-        (link.path != parent_path && link.path != child_path).then(|| {
-            ConversionLink {
+    links.extend(
+        vault_links
+            .links
+            .iter()
+            .filter(|link| link.path != parent_path && link.path != child_path)
+            .map(|link| ConversionLink {
                 path: display_relative(&link.path),
                 line: link.line,
                 before: link.before.clone(),
                 after: link.after.clone(),
-            }
-        })
-    }));
+            }),
+    );
     links.sort_by(|left, right| {
         (&left.path, left.line, &left.before).cmp(&(
             &right.path,
@@ -1354,9 +1356,7 @@ mod tests {
             "stub-missing"
         );
 
-        let duplicate_stubs = format!(
-            "---\ntype: \"[[area]]\"\n---\n## Topic\n\n- [[notes/draft]]\n\n## Other\n\n- [[notes/draft]]\n"
-        );
+        let duplicate_stubs = "---\ntype: \"[[area]]\"\n---\n## Topic\n\n- [[notes/draft]]\n\n## Other\n\n- [[notes/draft]]\n".to_string();
         let root = write_vault(&duplicate_stubs, &valid_child);
         assert_eq!(
             plan_inline(root.path(), "notes/draft").unwrap_err().code,

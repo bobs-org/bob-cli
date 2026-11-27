@@ -144,6 +144,18 @@ const TABLE: &[Entry] = &[
         arg: "note",
         kind: Kind::VaultNote,
     },
+    // `bob prose extract` / `inline`: a fingerprint from a preview and a
+    // 1-based line number have no live provider.
+    Entry {
+        path: &["prose", "extract"],
+        arg: "expect",
+        kind: Kind::FreeText,
+    },
+    Entry {
+        path: &["prose", "extract"],
+        arg: "line",
+        kind: Kind::FreeText,
+    },
     Entry {
         path: &["prose", "extract"],
         arg: "note",
@@ -153,6 +165,11 @@ const TABLE: &[Entry] = &[
         path: &["prose", "format"],
         arg: "note",
         kind: Kind::ProseNote,
+    },
+    Entry {
+        path: &["prose", "inline"],
+        arg: "expect",
+        kind: Kind::FreeText,
     },
     Entry {
         path: &["prose", "inline"],
