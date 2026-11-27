@@ -1274,7 +1274,7 @@ mod tests {
     }
 
     fn run_inline_cli(root: &Path) -> i32 {
-        let mut command = crate::native::prose::cli::build_cli();
+        let command = crate::native::prose::cli::build_cli();
         let matches = command
             .try_get_matches_from(vec![
                 OsString::from("bob prose"),
