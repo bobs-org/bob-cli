@@ -85,19 +85,23 @@ The host is an empty `span.bob-snooze-mark` with `role="img"`, an accessible
 label, and a top-positioned Obsidian tooltip. Copying a line never copies the
 clock, and a theme snippet can replace it with a mask.
 
-The host draws the Lucide `alarm-clock` glyph from
-`content: var(--bob-snooze-mark-glyph)` through a CSS mask, tinted
-`currentColor`. The time rides in `::after` from
-`attr(data-bob-snooze-time)` with tabular numbers
-(`font-variant-numeric: tabular-nums`), so `15:30` never reflows as the
-countdown ticks.
+The Lucide `alarm-clock` mask image is held in
+`--bob-snooze-mark-glyph` and tinted with `currentColor`. The clock host
+keeps the Today mark's height, margins, and alignment, but grows in width
+to fit the time and its optional due label. The time rides in `::after`
+from `attr(data-bob-snooze-label)` with tabular numbers
+(`font-variant-numeric: tabular-nums`): asleep and blocked clocks show
+`15:30`, while a due clock shows `15:30 · due`.
+
+State classes are `bob-snooze-mark--asleep`, `bob-snooze-mark--due`, and
+`bob-snooze-mark--blocked`.
 
 - Asleep is indigo, a `color-mix` of the theme blue and purple, matching the
   ledger's asleep tone.
 - Due is amber with one gentle transition pulse. The pulse never replays on
   scrolling, rerender, or startup.
 - Blocked is muted.
-- The box matches the Today mark metrics (`1.2em × 1.2em`, `font-size:
+- The box keeps the Today mark metrics (`height: 1.2em`, `font-size:
   0.85em`, `line-height: 1`, `vertical-align: -0.14em`,
   `margin-inline: 0.06em 0.3em`, `border-radius: 999px`,
   `user-select: none`, `cursor: default`), so the clock never changes line
@@ -175,8 +179,8 @@ never a fresh accent or a live countdown.
 
 The host is a `span.bob-snooze-woke` with `role="img"`, an accessible label,
 and a top-positioned Obsidian tooltip. It paints through the same shared
-alarm glyph as the definition clock: warm amber-gold while fresh, a quiet
-outline once settled.
+`--bob-snooze-mark-glyph` mask as the definition clock, tinted with
+`currentColor`: warm amber-gold while fresh, a quiet outline once settled.
 
 - **Fresh** means today and `0 <= age < 60 minutes`, where age is now minus
   the actual wake time. Exactly 60 minutes settles to the outline.
