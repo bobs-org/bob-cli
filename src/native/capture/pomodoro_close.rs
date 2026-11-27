@@ -2661,7 +2661,10 @@ pub(super) fn refresh_close_headline(
 /// Post-state headline index for the next entry, matched by name and time
 /// range against the post-state scan (nearest to the ledger-reported line
 /// wins), with the ledger line as fallback.
-fn locate_next_headline(post_day: &str, next: &PomodoroCloseNextJson) -> usize {
+pub(super) fn locate_next_headline(
+    post_day: &str,
+    next: &PomodoroCloseNextJson,
+) -> usize {
     let fallback = next.line.saturating_sub(1);
     let scan = capture_pomodoros::scan(post_day);
     scan.entries

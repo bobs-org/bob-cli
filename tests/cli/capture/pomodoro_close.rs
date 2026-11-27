@@ -1938,3 +1938,241 @@ fn capture_pomodoro_close_task_reports_closed_and_next() {
     assert_eq!(blocks[1]["roles"], serde_json::json!(["next"]));
     assert_eq!(blocks[1]["created"], true);
 }
+
+/// bob-cli-qa fixture: empty open BUILD, then a closed timed WORK with a
+/// child Task Link. `x=build` at 11:00 records BUILD and files it after
+/// WORK without dropping WORK's time or child.
+fn timed_entry_record_vault(
+    name: &str,
+    day_body: &str,
+) -> (TempDir, PathBuf, PathBuf) {
+    let temp = TempDir::new(name);
+    let vault = temp.path().join("vault");
+    let day_file = vault.join("2026").join("20261008.md");
+    write_toggle_task_settings(&vault);
+    write_file(&day_file, day_body);
+    write_file(&vault.join("jobs.md"), "- [*] #task Early work ^early\n");
+    (temp, vault, day_file)
+}
+
+fn block_named<'a>(
+    json: &'a serde_json::Value,
+    name: &str,
+) -> &'a serde_json::Value {
+    json["pomodoro_blocks"]
+        .as_array()
+        .expect("pomodoro_blocks array")
+        .iter()
+        .find(|block| block["name"] == name)
+        .unwrap_or_else(|| panic!("missing {name} block: {json}"))
+}
+
+fn headline_line(day: &str, needle: &str) -> usize {
+    day.lines()
+        .position(|line| line.contains(needle))
+        .map(|index| index + 1)
+        .unwrap_or_else(|| panic!("missing headline {needle:?} in:\n{day}"))
+}
+
+#[test]
+fn capture_pomodoro_record_preserves_closed_timed_entry_with_child() {
+    // Exact bob-cli-qa repro: debug builds used to panic
+    // `pomodoro block ref names a non-entry headline` because the Next
+    // ref kept WORK's pre-move line, which landed on the child after
+    // chronological filing.
+    let day_before = concat!(
+        "# 2026-10-08\n",
+        "\n",
+        "## Pomodoros\n",
+        "\n",
+        "- [ ] () — BUILD\n",
+        "- [x] (**0700-0800** [t:: 60m]) — WORK\n",
+        "  - [[jobs#^early]]\n",
+    );
+    let (_temp, vault, day_file) =
+        timed_entry_record_vault("bob-cli-qa-timed-child", day_before);
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-10-08 11:00:00",
+        &["x=build"],
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_eq!(json["ok"], true, "{json}");
+    assert_eq!(json["kind"], "pomodoro_past", "{json}");
+    assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
+    assert!(
+        json["pomodoro_blocks"]
+            .as_array()
+            .is_some_and(|b| !b.is_empty()),
+        "release must not omit pomodoro_blocks: {json}"
+    );
+    let work = "- [x] (**0700-0800** [t:: 60m]) — WORK";
+    let child = "  - [[jobs#^early]]";
+    assert!(day_after.contains(work), "closed time kept:\n{day_after}");
+    assert!(day_after.contains(child), "child link kept:\n{day_after}");
+    let work_at = day_after.find(work).expect("work");
+    let child_at = day_after.find(child).expect("child");
+    let build_at = day_after.find("— BUILD").expect("recorded BUILD");
+    assert!(
+        work_at < child_at && child_at < build_at,
+        "WORK block stays together and files before recorded BUILD:\n{day_after}"
+    );
+    let recorded = block_named(&json, "BUILD");
+    assert_eq!(recorded["time_range"], "1035-1100", "{recorded}");
+    assert_eq!(recorded["status"], "completed", "{recorded}");
+    assert_eq!(recorded["roles"], serde_json::json!(["recorded"]));
+    assert_eq!(
+        recorded["line"],
+        headline_line(&day_after, "— BUILD"),
+        "{recorded}\n{day_after}"
+    );
+    assert_eq!(
+        recorded["relative_target"], "2026/20261008.md",
+        "{recorded}"
+    );
+    let next = block_named(&json, "WORK");
+    assert_eq!(next["time_range"], "0700-0800", "{next}");
+    assert_eq!(next["status"], "completed", "{next}");
+    assert_eq!(next["created"], false, "{next}");
+    assert_eq!(
+        next["line"],
+        headline_line(&day_after, "— WORK"),
+        "{next}\n{day_after}"
+    );
+    let lines = next["lines"].as_array().expect("WORK lines");
+    assert_eq!(lines[0]["text"], work, "{next}");
+    assert_eq!(lines[0]["change"], "unchanged", "{next}");
+    assert_eq!(lines[1]["text"], child, "{next}");
+    assert_eq!(lines[1]["change"], "unchanged", "{next}");
+}
+
+#[test]
+fn capture_pomodoro_record_preserves_childless_timed_entry() {
+    // decisions:consumption-keeps-notes-and-recorded-time: a closed
+    // timed row stays even when it has no children.
+    let day_before = concat!(
+        "# 2026-10-08\n",
+        "\n",
+        "## Pomodoros\n",
+        "\n",
+        "- [ ] () — BUILD\n",
+        "- [x] (**0700-0800** [t:: 60m]) — WORK\n",
+    );
+    let (_temp, vault, day_file) =
+        timed_entry_record_vault("bob-cli-qa-childless-timed", day_before);
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-10-08 11:00:00",
+        &["x=build"],
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
+    let work = "- [x] (**0700-0800** [t:: 60m]) — WORK";
+    assert!(
+        day_after.contains(work),
+        "childless timed kept:\n{day_after}"
+    );
+    let work_at = day_after.find(work).expect("work");
+    let build_at = day_after.find("— BUILD").expect("build");
+    assert!(
+        work_at < build_at,
+        "WORK files before recorded BUILD:\n{day_after}"
+    );
+    let recorded = block_named(&json, "BUILD");
+    assert_eq!(recorded["time_range"], "1035-1100", "{recorded}");
+    assert_eq!(recorded["roles"], serde_json::json!(["recorded"]));
+    let next = block_named(&json, "WORK");
+    assert_eq!(next["time_range"], "0700-0800", "{next}");
+    assert_eq!(
+        next["line"],
+        headline_line(&day_after, "— WORK"),
+        "{next}\n{day_after}"
+    );
+    assert_eq!(next["lines"][0]["text"], work, "{next}");
+    assert_eq!(next["lines"][0]["change"], "unchanged", "{next}");
+}
+
+#[test]
+fn capture_pomodoro_record_preserves_reordered_closed_entry() {
+    // BUILD sits between two closed timed entries. Filing inserts the
+    // recorded row after WORK and before LATER, keeps both children, and
+    // does not steal the trailing same-name BUILD placeholder.
+    let day_before = concat!(
+        "# 2026-10-08\n",
+        "\n",
+        "## Pomodoros\n",
+        "\n",
+        "- [x] (**0700-0800** [t:: 60m]) — WORK\n",
+        "  - [[jobs#^early]]\n",
+        "- [ ] () — BUILD\n",
+        "- [x] (**1200-1230** [t:: 30m]) — LATER\n",
+        "  - [[jobs#^late]]\n",
+        "- [ ] () — BUILD\n",
+    );
+    let (_temp, vault, day_file) =
+        timed_entry_record_vault("bob-cli-qa-reorder-closed", day_before);
+    write_file(
+        &vault.join("jobs.md"),
+        concat!(
+            "- [*] #task Early work ^early\n",
+            "- [*] #task Late work ^late\n",
+        ),
+    );
+    let json = capture_json_dry_run_matches_real(
+        &vault,
+        &day_file,
+        "2026-10-08 11:00:00",
+        &["x=build"],
+    );
+    let day_after = fs::read_to_string(&day_file).expect("read day after");
+    assert_pomodoro_blocks_cover_changes(day_before, &day_after, &json);
+    let work = "- [x] (**0700-0800** [t:: 60m]) — WORK";
+    let work_child = "  - [[jobs#^early]]";
+    let later = "- [x] (**1200-1230** [t:: 30m]) — LATER";
+    let later_child = "  - [[jobs#^late]]";
+    let queued = "- [ ] () — BUILD";
+    for needle in [work, work_child, later, later_child, queued] {
+        assert!(
+            day_after.contains(needle),
+            "missing {needle:?}:\n{day_after}"
+        );
+    }
+    let work_line = headline_line(&day_after, "— WORK");
+    let later_line = headline_line(&day_after, "— LATER");
+    let recorded_line = day_after
+        .lines()
+        .position(|line| line.contains("— BUILD") && line.contains("[x]"))
+        .map(|index| index + 1)
+        .expect("recorded BUILD");
+    let queued_line = headline_line(&day_after, "- [ ] () — BUILD");
+    assert!(
+        work_line < recorded_line
+            && recorded_line < later_line
+            && later_line < queued_line,
+        "recorded BUILD files between WORK and LATER:\n{day_after}"
+    );
+    let recorded = block_named(&json, "BUILD");
+    assert_eq!(recorded["time_range"], "1035-1100", "{recorded}");
+    assert_eq!(recorded["status"], "completed", "{recorded}");
+    assert_eq!(recorded["roles"], serde_json::json!(["recorded"]));
+    assert_eq!(recorded["line"], recorded_line, "{recorded}\n{day_after}");
+    let next = block_named(&json, "LATER");
+    assert_eq!(next["time_range"], "1200-1230", "{next}");
+    assert_eq!(next["line"], later_line, "{next}\n{day_after}");
+    assert_eq!(next["lines"][0]["text"], later, "{next}");
+    assert_eq!(next["lines"][0]["change"], "unchanged", "{next}");
+    assert_eq!(next["lines"][1]["text"], later_child, "{next}");
+    assert_eq!(next["lines"][1]["change"], "unchanged", "{next}");
+    let queued_blocks = json["pomodoro_blocks"]
+        .as_array()
+        .expect("blocks")
+        .iter()
+        .filter(|block| block["name"] == "BUILD" && block["status"] == "queued")
+        .count();
+    assert_eq!(
+        queued_blocks, 0,
+        "trailing same-name BUILD is not the next identity: {json}"
+    );
+}

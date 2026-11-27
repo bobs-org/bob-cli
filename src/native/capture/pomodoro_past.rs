@@ -1548,32 +1548,37 @@ pub(super) fn record_one_member(
         .unwrap_or("")
         .to_string();
     // Continuation keeps explicit identity through the chronological move:
-    // use the remapped filed index instead of a by-name search.
+    // use the remapped filed index instead of a by-name search that
+    // collides when placeholders share a name. Existing later entries
+    // (created=false) take the same remap: drain-then-insert can leave
+    // their pre-move line on a child of a closed timed entry.
+    let filed_scan = capture_pomodoros::scan(&filed_text);
     if let Some(next) = summary.next_pomodoro.as_mut() {
-        if next.created {
-            if let Some(remapped) = new_next_0based {
-                next.line = remapped + 1;
-            } else {
-                // Fall back to a by-name search only when the move left no
-                // survivor (should not happen for a created continuation):
-                // prefer the last match so an earlier same-name placeholder
-                // does not steal the continuation's identity.
-                let scan = capture_pomodoros::scan(&filed_text);
-                if let Some(found) = scan.entries.iter().rev().find(|e| {
-                    e.state == PomodoroState::Open
-                        && e.time_range.is_none()
-                        && e.name == next.name
-                }) {
-                    next.line = found.line;
-                }
+        if let Some(remapped) = new_next_0based {
+            next.line = remapped + 1;
+        } else if next.created {
+            // Fall back to a by-name search only when the move left no
+            // survivor (should not happen for a created continuation):
+            // prefer the last match so an earlier same-name placeholder
+            // does not steal the continuation's identity.
+            if let Some(found) = filed_scan.entries.iter().rev().find(|e| {
+                e.state == PomodoroState::Open
+                    && e.time_range.is_none()
+                    && e.name == next.name
+            }) {
+                next.line = found.line;
             }
-        } else if let Some(line) = next.line.checked_sub(0) {
-            // Existing next: re-resolve by scan (line may have shifted).
-            let scan = capture_pomodoros::scan(&filed_text);
-            // Keep the reported line when the entry still exists there;
-            // otherwise leave it (tests assert line numbers, and the
-            // ordinary close path leaves them stable for untouched rows).
-            let _ = (scan, line);
+        }
+        // Pin against the filed scan so the Next ref's `after` is an
+        // entry headline. Name plus time range, nearest to the remapped
+        // line, keeps duplicate headlines distinct.
+        let after = pomodoro_close::locate_next_headline(&filed_text, next);
+        if filed_scan
+            .entries
+            .iter()
+            .any(|entry| entry.line.saturating_sub(1) == after)
+        {
+            next.line = after + 1;
         }
     }
     // Remap nested task ledger lines that rode with the closed block.
@@ -1613,22 +1618,35 @@ pub(super) fn record_one_member(
         new_headline_idx,
     )];
     // The continuation (when created) reports as Next at its post-move
-    // line, so later items reconcile offers through it.
+    // line, so later items reconcile offers through it. An existing later
+    // entry is resolved against the filed scan so a closed timed entry's
+    // child cannot steal the headline.
     if let Some(next) = summary.next_pomodoro.as_ref() {
-        let after = next.line.saturating_sub(1);
-        if next.created {
-            pomodoro_refs.push(
-                super::pomodoro_blocks::PomodoroBlockRef::created(
-                    super::pomodoro_blocks::PomodoroBlockRole::Next,
-                    after,
-                ),
-            );
+        let after = pomodoro_close::locate_next_headline(&filed_text, next);
+        if filed_scan
+            .entries
+            .iter()
+            .any(|entry| entry.line.saturating_sub(1) == after)
+        {
+            if next.created {
+                pomodoro_refs.push(
+                    super::pomodoro_blocks::PomodoroBlockRef::created(
+                        super::pomodoro_blocks::PomodoroBlockRole::Next,
+                        after,
+                    ),
+                );
+            } else {
+                pomodoro_refs.push(
+                    super::pomodoro_blocks::PomodoroBlockRef::resolved(
+                        super::pomodoro_blocks::PomodoroBlockRole::Next,
+                        after,
+                    ),
+                );
+            }
         } else {
-            pomodoro_refs.push(
-                super::pomodoro_blocks::PomodoroBlockRef::resolved(
-                    super::pomodoro_blocks::PomodoroBlockRole::Next,
-                    after,
-                ),
+            debug_assert!(
+                false,
+                "next pomodoro line is not an entry after filing"
             );
         }
     }
@@ -1725,7 +1743,6 @@ pub(super) fn record_one_member(
     // have narrowed READ to CHORE through default-type agreement, so the
     // initial placeholder name (READ) must not be reported when the ledger
     // now says CHORE. Prefer the filed scan, then the close's closed name.
-    let filed_scan = capture_pomodoros::scan(&filed_text);
     let settled_name = filed_scan
         .entries
         .iter()
