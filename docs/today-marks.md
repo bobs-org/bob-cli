@@ -77,6 +77,9 @@ positions, so vim motions (`0`, `^`, `I`, `w`) are unchanged. It covers no text,
 so it remains visible when the cursor reveals raw `#task`; it does not rebuild
 on `selectionSet`. Unmarked rows reserve no space.
 
+A Snoozed Task's alarm clock shares this slot. 🍅 wins when both would apply,
+so a line never wears both marks; see [Snooze marks](snooze-marks.md).
+
 ## Glyph anatomy
 
 The host is an empty `span.bob-today-mark`; CSS `::before` draws the glyph from
@@ -148,6 +151,7 @@ live-region announcement.
 `Toggle Today marks` (`toggle-today-marks`) is a session toggle, on by default.
 It flips `body.bob-today-marks-off`, refreshes every editor and rendered row,
 and shows `Today marks on` or `Today marks off`. It never changes source text.
+Turning it off also hides snooze definition clocks.
 
 ## Surfaces
 

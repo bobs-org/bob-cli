@@ -338,6 +338,8 @@ remains); a due count wears amber (`1 due`) and a blocked count is dimmed
 (`1 blocked`). `TODAY a/b` is current Today over Today plus the on-clock
 addition. A missing daily note yields an empty snoozed view; a Snoozed
 section without a Pomodoros section still reads.
+In Obsidian, the `bob-plan` block shows this meter as a chip beside TODAY;
+see [Snooze marks](snooze-marks.md#plan-chip).
 
 The dashboard keeps its own exclusion: the dash PENDING/NEXT sections and
 the daily `bob-plan` block must exclude planned-today (owned by the outer

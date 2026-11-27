@@ -451,26 +451,30 @@ rows (`1530`, `1900`), now 13:00.
 
 ## JavaScript mirror
 
-bob-ledger-tools implements this contract in fresh sibling fragments with
-thin hooks into the existing near-limit files: shared snooze display and
-model helpers plus a runtime fragment; definition adapters beside the Today
-`143`/`275`/`276`/`277` machinery; woken-link fragments beside the
-Event-link-time `291d`/`291e`/`291f` machinery; separate row
-model/editor/reading fragments; and a small plan helper beside
-`290-plugin-today-and-location.js`. Every hand-edited fragment stays at or
-below 1,000 lines. The bundle regenerates with `npm run build`; never edit
-the generated bundle. New tests join `package.json`'s `test:unit` list; new
-helpers may stay private or join the test harness, with no new public
-namespace.
+bob-ledger-tools implements this contract in sibling fragments with thin
+hooks into the Today, plan, and ledger-mark files. Pure models:
+`src/143a-snooze-definition-model.js` (SM-D), `src/143b-snooze-row-paint-model.js`
+(SM-R), `src/291g-snooze-woken-pills.js` (SM-W), and
+`src/143c-snoozed-plan-meter.js` (SM-P). Definition clocks:
+`src/277a-plugin-snooze-marks.js` (Live Preview, `toggle-snooze-marks`, and
+the shared refresh), `src/277b-plugin-snooze-marks-reading.js` (rendered
+views), and `src/277c-plugin-snooze-marks-jump.js` (row and section jumps).
+Woken pills: `src/291h-plugin-snooze-woken-pills.js` and
+`src/291i-plugin-snooze-woken-pills-reading.js`. Row and heading paint:
+`src/278a-plugin-snooze-row-paint.js`, `src/278b-plugin-snooze-row-paint-reading.js`,
+and `src/278c-plugin-snooze-row-paint-history.js`. Plan chip:
+`src/290c-snoozed-plan-chip.js`. There is no api namespace.
 
-Parity is byte-for-byte: each plugin phase copies
-`tests/fixtures/snooze/marks.json` from the bob-cli checkout into its
-fixture directory unchanged and executes its group's inputs and expected
-values verbatim, resolving `BOB_CLI_DIR` to that checkout. No test
-substitutes simplified local data for the canonical fixture.
+Parity is byte-for-byte: the plugin copies
+`tests/fixtures/snooze/marks.json` unchanged into
+`plugins/bob-ledger-tools/scripts/fixtures/snooze/marks.json`, and
+`scripts/test-ledger-tools-snooze-{definition-marks,woken-pills,row-paint,plan-meter}.cjs`
+assert that parity against `BOB_CLI_DIR` and run their group's inputs and
+expected values verbatim. No test substitutes simplified local data for the
+canonical fixture. `scripts/obsidian-snooze-marks-e2e.cjs` verifies the
+surfaces in real Obsidian (light and dark, Live Preview and Reading view)
+in an isolated scratch vault.
 
 ## Deferred
 
-Nothing is deferred: the visual-proof phase verifies this contract in real
-Obsidian (light and dark, Live Preview and Reading view) and attaches the
-evidence to its own bead.
+Nothing is deferred.
