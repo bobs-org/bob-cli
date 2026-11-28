@@ -113,6 +113,20 @@ copy:
 
 See the [Copy card](plugins/copy-card.md).
 
+### `cabinets`
+
+| Key | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `cabinets.<type>.<cabinet>` | `open` or `closed` | `closed` | Cabinet first-load; CLI ignores |
+
+```yaml
+cabinets:
+  album:
+    schema: open
+```
+
+See `plugins/cabinets.md`.
+
 ### `plugins`
 
 | Key | Type | Default | Effect |
@@ -126,17 +140,11 @@ plugins:
     - bob-navigation-hotkeys
 ```
 
-Entries are trimmed; blank, non-string, or duplicate entries are config errors
-naming `plugins.sync`. `plugins` must be a mapping and `plugins.sync` a
-sequence. Unknown sibling keys are ignored. When unset, sync exits 2 with a
-snippet and list marks every row `configured: false`. See [Bob Plugins](../plugins.md).
+Blank, non-string, or duplicate entries are `plugins.sync` errors; `plugins` must be a mapping. Unset sync exits 2. See [Bob Plugins](../plugins.md).
 
 ### `plan`
 
-All caps are positive integers. `max_ready_per_note` is limited to 1–999;
-the other numeric caps use positive 32-bit integers. The lists must contain
-nonempty strings. Invalid `plan` settings cause `bob plan` and `bob ready` to
-exit 2; capture and hook surfaces warn and use their established fallback.
+Caps are positive integers (`max_ready_per_note` 1–999). Lists hold nonempty strings. Invalid `plan` exits 2 in `bob plan`/`bob ready`; elsewhere warns with fallback.
 
 | Key | Type | Default | Effect |
 | --- | --- | --- | --- |

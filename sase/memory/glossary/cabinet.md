@@ -15,9 +15,10 @@ order, with the **property cabinet** (Properties, toggled with `-`) always
 last. Above it come content cabinets (Areas, Projects, Notebooks, and Albums
 on an [[area-card]] or [[project-card]], Records on an [[album-card]],
 Outline on a prose card), then configuration cabinets (Schema on an album
-card, Setup on the [[bank-card]]). Empty catalogs get none. Records starts
-open, the other content cabinets start closed, and Outline, Schema, and
-Setup open themselves for a new problem.
+card, Setup on the [[bank-card]]). Empty catalogs get none. Every cabinet
+starts closed on a note's first paint in a session unless the `cabinets:`
+block in Bob's config opens it for that card type. Problems show only in the
+closed header's chip, summary, and Sync action.
 
 A content cabinet shows the same rows, grouping, and actions as the
 bob-owned catalog callout it stands in for. The callout stays in the note,

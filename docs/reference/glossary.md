@@ -116,7 +116,7 @@ title-slot Bank Card owns it, gated by source/cache evidence, confirmed
 `props_v1`, and working editor routing. Otherwise native Properties and the
 existing per-row `bank` fallback return. The card's Setup section shows
 `bob bank config` categories, accounts, rules, and findings; its title block
-keeps the bank identity and cash breadcrumb. Setup folds when healthy; `_`
+keeps the bank identity and cash breadcrumb. Setup starts closed; `_`
 toggles it, `=` opens Bank Setup, and `+` opens the generic Property Editor.
 The `bank` row hands off to `=`; the card has no Area Settings, including when
 older Bob reports the former hybrid contract. The shared foot is the only
@@ -200,9 +200,10 @@ order, with the **property cabinet** (Properties, toggled with `-`) always
 last. Above it come content cabinets (Areas, Projects, Notebooks, and Albums
 on an [Area Card](#area-card) or [Project Card](#project-card), Records on an [Album Card](#album-card),
 Outline on a prose card), then configuration cabinets (Schema on an album
-card, Setup on the [Bank Card](#bank-card)). Empty catalogs get none. Records starts
-open, the other content cabinets start closed, and Outline, Schema, and
-Setup open themselves for a new problem.
+card, Setup on the [Bank Card](#bank-card)). Empty catalogs get none. Every cabinet
+starts closed on a note's first paint in a session unless the `cabinets:`
+block in Bob's config opens it for that card type. Problems show only in the
+closed header's chip, summary, and Sync action.
 
 A content cabinet shows the same rows, grouping, and actions as the
 bob-owned catalog callout it stands in for. The callout stays in the note,
