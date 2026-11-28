@@ -30,6 +30,7 @@ and rules. Filter the same pages by CLI, Obsidian, or macOS on
 ## Plan the day
 
 - [Run the morning review walk](run-morning-review.md)
+- [Snooze a task until later today](snooze-task-for-later-today.md)
 - [Keep Ready lanes under their cap](keep-ready-under-cap.md)
 - [Acknowledge bank transactions](acknowledge-bank-transactions.md)
 - [Audit subscriptions](audit-subscriptions.md)

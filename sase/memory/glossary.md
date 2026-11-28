@@ -33,13 +33,14 @@ project-note capture); Project Task (prj task); Property Card (card family); Pro
 (prose title card); Prose Note (prose note, article note); Record Card (record sheet);
 Record Note; Ref Card (reference card, ref title card); Ref Panel (Bob Refs, refs
 panel); Reference Note (ref note); Reference Task (ref task); Root Parent; Rotten Log
-(keep log); Schedule Log; Stats Dash (dash\_stats); Stats Strip (period strip, week
-strip, quarter strip, year strip); Successor Offer; Task Decay (decay, decay ladder,
-decay card, step down); Task Dependency Link (task dep link, dep link); Task Drawer
-(drawer); Task Freshness (freshness); Task Link (task block link); Task Mention
-(mention, text mention); Task Merge; Task Relation (relation, LINKS line, LINKED FROM
-line); Task Requirement (req, task req); Task Split; Task Successor (successor); Task
-Type (type, theme, pomodoro theme, pomodoro-theme); Top-Level Project (top project);
-Walker Footer (walk footer, lane footer, links footer, bank footer); Work Log
+(keep log); Schedule Log; Snoozed Task (snooze, snoozed row, later-today task); Stats
+Dash (dash\_stats); Stats Strip (period strip, week strip, quarter strip, year strip);
+Successor Offer; Task Decay (decay, decay ladder, decay card, step down); Task
+Dependency Link (task dep link, dep link); Task Drawer (drawer); Task Freshness
+(freshness); Task Link (task block link); Task Mention (mention, text mention); Task
+Merge; Task Relation (relation, LINKS line, LINKED FROM line); Task Requirement (req,
+task req); Task Split; Task Successor (successor); Task Type (type, theme, pomodoro
+theme, pomodoro-theme); Top-Level Project (top project); Walker Footer (walk footer,
+lane footer, links footer, bank footer); Work Log
 
 <!-- /sase:strands -->

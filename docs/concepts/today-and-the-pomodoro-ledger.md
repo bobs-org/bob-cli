@@ -31,6 +31,13 @@ The two open entries plan two tasks for today. The closed entry is work history:
 
 Three ideas share the ledger, and they behave differently. The live plan is the set of open entries and their dedicated links right now; editing it changes what `bob plan` reports. Session history is the closed entries and their struck or marked links; closing a Pomodoro retires its links into history without touching the tasks. Task commitment is the lane: linking a Ready task promotes it to Next, while removing the last live link removes Today membership but leaves the sticky Next or Pending lane in place.
 
+A task planned for later today can wait as a Snoozed Task in the daily note's
+`## Snoozed` section. Its Task Link and child notes stay there, outside the
+Pomodoro ledger, so it is committed but not Today until Bob wakes it. At its
+time, Bob moves the link and notes into an untimed open Pomodoro of the task's
+type. Snoozes are same-day only; use a scheduled date for another day. See
+[Snooze a task until later today](../guides/snooze-task-for-later-today.md).
+
 Starting or closing a session and completing its task are therefore distinct outcomes. Closing a Pomodoro ends the time block and archives its links; completing a task changes the task line itself to Done and may offer follow-up work elsewhere. A session can close with work unfinished, and a task can complete outside any session.
 
 ## Today is not a lane, tag, or folder
@@ -50,6 +57,7 @@ Exempt PLAN entries can still contribute Today tasks. The plan budget ignores ex
 - [Freshness and the review walk](freshness-and-the-review-walk.md) — how Today rows are reviewed.
 - [Understand Bob](index.md) — the eight nouns and where Today fits.
 - [Plan budget, Today, and lanes](../plan.md) — the authoritative Today and budget definitions.
+- [Snooze a task until later today](../guides/snooze-task-for-later-today.md) — park work until later today.
 - [Pomodoro homes](../pomodoro-homes.md) — how ledger entries derive their labels.
 - [Task types](../task-types.md) — remembered names, hues, and `bob types`.
 - [Today marks](../today-marks.md) — the display-only mark on Today tasks.
