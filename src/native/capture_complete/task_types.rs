@@ -305,14 +305,14 @@ fn build_inner(
         }
     }
 
-    if let Some(leads) = leads {
+    // Gate 2 (a new subject) and the leading-marker half of gate 3 are cheap,
+    // so check them before `attach_leads` loads route policies or probes.
+    if let Some(leads) = leads.filter(|_| subject == "new" && leading) {
         attach_leads(
             bob_dir,
             raw_text,
             field,
             editor_item,
-            subject,
-            leading,
             leads,
             &mut candidates,
         );
@@ -357,18 +357,17 @@ fn subject_refusal(
 /// only whitespace after it, and one parser probe over the simulated
 /// accept plus the inserted lead still reads as a plain new task. Shell
 /// completion never reaches here (it passes no leads config), and refused
-/// rows never gain one.
+/// rows never gain one. The caller has already checked that the subject is
+/// `new` and the marker is leading.
 fn attach_leads(
     bob_dir: &Path,
     raw_text: &str,
     field: &crate::native::capture_language::CompletionField,
     editor_item: Option<&EditorItemParse>,
-    subject: &str,
-    leading: bool,
     leads: &TypeLeadsConfig,
     candidates: &mut [TaskTypeCandidate],
 ) {
-    if subject != "new" || !leading || leads.leads.is_empty() {
+    if leads.leads.is_empty() {
         return;
     }
     if lead_anchor_line_end(raw_text, field).is_none() {
