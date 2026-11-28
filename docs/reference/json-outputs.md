@@ -43,7 +43,7 @@ bob plan -f json -b /path/to/synthetic-vault
 
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
-| `bob clipboard` | `-f json` | Read-only selection and provider diagnostics; reports `would_succeed`, the selected provider and entry ages, or a refusal `code` and message. Clipboard text is omitted | `schema_version: 1` | [Capture](../capture.md#clipboard) |
+| `bob clipboard` | `-f json` | Read-only selection and provider diagnostics; reports `would_succeed`, selected provider and entry ages, or refusal `code` and message. Clipboard text is omitted | `schema_version: 1` | [Capture](../capture.md#clipboard) |
 | `bob capture` | `-f json` | Capture effects and previews, plus optional `snooze: {action, time?, wake_at?, route, block_id, daily_file, row?}`, requirements, drawer, Gmail, and record results | Unversioned (`ok`, no `schema_version`) | [Capture JSON](../capture.md#input-stdin-and-json-output), [capture snooze](#capture-snooze), [task requirements](../task-requirements.md#5-authoring), [Mail-close results](#mail-close-results) |
 | `bob capture-parse` | `-f json` | Modes, spans, diagnostics, and needs (`grammar: 34`); additive `snooze` full-token span, requirement markers, notebook flag, and `goto` | `schema_version: 1` | [Capture parse](../capture.md#bob-capture-parse) |
 | `bob capture-complete` | `-f json` | Contexts, candidates, ranges, pickers, effects, creation choices; Snooze emits literal `HHMM` replacements. Relation candidates add `dependency_tie` (`"prerequisite"`/`"dependent"`); `also_prerequisite` is deprecated. Plus optional `lead` title text on editor `task_type` rows | `schema_version: 1` | [Capture completion](../capture.md#bob-capture-complete) |
@@ -64,7 +64,7 @@ bob plan -f json -b /path/to/synthetic-vault
 
 Capture results may carry body-free `gmail: [{url, verdict, thread_id?, note?, link?, date_hint?, message}]` previews; see [Gmail links](../capture.md#gmail-links).
 
-Capture line coordinates refer to the final, settled Markdown, including in
+Capture line coordinates refer to final, settled Markdown, including in
 dry runs. This covers parent, task/section block, open-note, moved-task,
 successor, and jump locations. See [capture output](../capture.md#input-stdin-and-json-output).
 
@@ -170,7 +170,7 @@ sets `one_off: true`.
 | Command | Flag | Shape | Version | Contract |
 | --- | --- | --- | --- | --- |
 | `bob albums list` | `-f json` | Albums, independent index groups, `walk_by`, and `index_group_by`, walk order/groups with first-member heads, issues, owner `catalogs`, and `capabilities` (`record_walk_groups_v1`) | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
-| `bob albums check` | `-f json` | Same report as list | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
+| `bob albums check` | `-f json` | Same as list | `schema_version: 1` | [Albums and record notes](../records.md#albums) |
 | `bob albums sync` | `-f json` | Index entries, grouped `walk`, owner `catalogs`, `kind`/`walk_lines`, transaction results | `schema_version: 1` | [Albums and record notes](../records.md#syncing-records-indexes) |
 | `bob albums tidy` | `-f json` | Tidied albums, counts, kept H1s, transaction results | `schema_version: 1` | [Tidying album titles](../records.md#tidying-album-titles) |
 | `bob albums create` | `-f json` | `album`, `changed`, `changes[]`, `catalogs`, `commit`, `error` | `schema_version: 1` | [Albums and record notes](../records.md#creating-an-album) |
@@ -496,7 +496,7 @@ capture unversioned).
 | `bob task reconcile` (aliases `task-status-hooks`, `mark-next-tasks`) | `-f json` | Sync result: marked, cleared, blocked, dependency, and reference changes | Unversioned (serialized sync result, no `schema_version`) | [Task Status Hooks](../task-status-hooks.md) |
 | `bob task reroll` (alias `randomize`) | `-f json` | Re-roll plan and per-task outcomes | `schema_version: 1` | [Randomize](../randomize.md) |
 | `bob query` | `-f json` (default is `paths`) | `engine`, `query_kind`, `format`, `paths`, `result`, and `warnings` | Unversioned (no `schema_version`) | [Bob query](../dataview.md) |
-| `bob snooze` (`list`, `add`, `drop`, `wake`) | `-f json` | Queue rows (including `wake_notice_eligible`), add/drop results, and wake batches; list includes `wake_notice_version: 1` and canonical `vault_root`; wake receipts record the selected notification channel and vault identity | `schema_version: 1` | [Snoozed tasks](../snooze.md#cli) |
+| `bob snooze` (`list`, `add`, `drop`, `wake`) | `-f json` | Queue rows (including `wake_notice_eligible`), add/drop results, and wake batches; deferred writes keep verb keys; list includes `wake_notice_version: 1` and canonical `vault_root`; wake receipts record the notification channel and vault identity | `schema_version: 1` | [Snoozed tasks](../snooze.md#cli) |
 | `bob prose format`, `bob prose adopt` | `-f json` | ArticlePlan: `notes[]` with edits and findings, plus `summary.articles`; adopt previews unless `-w` | `schema_version: 1` | [Prose JSON](../prose.md#json-articleplan-v1) |
 | `bob prose list` | `-f json` | ArticlePlan without each note's `edits` | `schema_version: 1` | [Prose JSON](../prose.md#json-articleplan-v1) |
 | `bob prose outline` | `-f json` | `title`, `numbering`, `words`, `preamble`, and `sections[]` | Unversioned (no `ok` or `schema_version`) | [Prose JSON](../prose.md#json-articleplan-v1) |

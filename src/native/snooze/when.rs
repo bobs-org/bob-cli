@@ -2,8 +2,9 @@
 //!
 //! Contract: `docs/snooze.md` § Time grammar. Supports `1530`, `15:30`,
 //! `3:30p`, `3p`, `19`, `+45m`, `+2h`, `+1h30m`, and the approved
-//! next-occurrence-today reading of bare `330`. Relative times round upward
-//! to a five-minute boundary. Resolution is in Bob's zone with an injected
+//! next-occurrence-today reading of bare `330`. Relative offsets round up
+//! to a multiple of five minutes and are added to the current minute
+//! (12:03 `+45m` → 12:48, `+2m` → 12:08). Resolution is in Bob's zone with an injected
 //! clock: a strictly future time on the same day, DST gaps refused,
 //! midnight overflow refused, and the first occurrence of a folded wall
 //! time. Past or next-day times are teaching refusals directing multi-day

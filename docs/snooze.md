@@ -68,7 +68,10 @@ in `docs/task-relations.md`.
 The time expression accepts `1530`, `15:30`, `H:MM`, `3:30p`, `3p`, `19`,
 `+45m`, `+2h`, and `+1h30m`. A bare `330` means the next 3:30 today:
 03:30 when future, else 15:30 when still today, else a past-time refusal.
-Relative times round upward to a five-minute boundary. Resolution is in
+Relative offsets round up to a multiple of five minutes, and the rounded
+offset is added to the current minute: at 12:03 `+45m` wakes at 12:48
+(the offset needs no rounding) while `+2m` rounds up to five minutes and
+wakes at 12:08. Resolution is in
 Bob's zone against an injected clock (`SnoozeClock { date, now_minutes,
 zone }`), and this module never reads process state itself:
 
@@ -227,10 +230,14 @@ display. `next_wake_at` is the earliest live target or null; blocked rows do
 not drive it. The plan reports current on-clock links, `cap`, and whether the
 ledger is over cap.
 
-Add reports `status` (`added` or `planned`), the task identity and title,
-the resolved target time and instant, the resulting lane, `daily_file`,
-the link-count plan, and `dry_run`. Drop reports `status` (`dropped` or
-`planned`), `daily_file`, and `dry_run`. Wake reports `status` (`woke`,
+Add reports `status` (`added`, `planned`, or `deferred`), the task identity
+and title, the resolved target time and instant, the resulting lane,
+`daily_file`, the link-count plan, and `dry_run`. Drop reports `status`
+(`dropped`, `planned`, or `deferred`), `daily_file`, and `dry_run`. A
+deferred add carries the add keys with the values planned before deferring
+and `dry_run: false`; a deferred drop carries the drop keys the same way.
+Neither carries wake-only keys. The vault write never happened, so retry
+the command. Wake reports `status` (`woke`,
 `nothing_due`, `deferred`, or `skipped`), `woken`, `dropped`, `ignored`,
 `pending`, `next_wake_at`, `plan`, `daily_file`, `notified`, and
 `wake_id`. A skipped report also carries `skip_reason`:

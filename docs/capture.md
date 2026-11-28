@@ -682,8 +682,10 @@ backslash).
 Append one lowercase terminal `z:<when>` at an item edge, before or after
 its route. It accepts the shared [snooze time grammar](snooze.md#time-grammar):
 `1530`, `15:30`, `3:30p`, `3p`, `19`, `+45m`, `+2h`, `+1h30m`, and the
-next-occurrence-today reading of bare `330`. Relative offsets round upward
-to five minutes. Bob resolves and validates the value through the same
+next-occurrence-today reading of bare `330`. Relative offsets round up to a
+multiple of five minutes and are added to the current minute: at 12:03
+`+45m` wakes at 12:48 while `+2m` rounds up to five minutes and wakes at
+12:08. Bob resolves and validates the value through the same
 zoned clock used by `bob snooze`; `BOB_NOW` fixes that clock in tests, and
 `BOB_DAY_FILE` selects the daily note. Only a future time today is accepted.
 Past, tomorrow, daylight-saving gaps, duplicate `z:` markers, and
@@ -7665,7 +7667,7 @@ merge hand-off offer rows, omitted when empty) and `repaired_files[]`;
 ordinary items omit the empty fields. Merge-only offers get their own Pull-In
 copy (`Link “T” in place of “S”` / `Link “T” in place of N merged tasks`), and
 the CLI's dependent rows print titles from `consequences`.
-`capture-parse` and `capture-complete` report grammar revision 34. Grammar 34 admits authored child bullets under note-less existing-task links as notes, drawers, and requirements. Grammar 32 retires ALL-CAPS drawer structure: plain uppercase bullets remain ordinary content, while `capture-parse` can report the nonblocking `caps_drawer_retired` warning for a catalog-key match. Grammar 31 claims a whole-draft `@route^id` as mode `task_goto` with an additive `goto` payload. Grammar 30 admits whole-bold container drafts for task drawers, project-note sections, `%n` notebook seeds, and record groups; it adds `drawer_marker` and title-only `drawer_bullet` spans. Grammar 29 admits [requirement bullets](#requirement-bullets) with `req_marker` spans and the `req_in_drawer`, `req_parent`, `req_state`, and `req_depth` refusals. Grammar 28 claims whole-draft `//query` as Go To Notes. Grammar 19
+`capture-parse` and `capture-complete` report grammar revision 34. Grammar 34 admits authored child bullets under note-less existing-task links as notes, drawers, and requirements. Grammar 33 adds the terminal `z:<when>` task snooze marker. Grammar 32 retires ALL-CAPS drawer structure: plain uppercase bullets remain ordinary content, while `capture-parse` can report the nonblocking `caps_drawer_retired` warning for a catalog-key match. Grammar 31 claims a whole-draft `@route^id` as mode `task_goto` with an additive `goto` payload. Grammar 30 admits whole-bold container drafts for task drawers, project-note sections, `%n` notebook seeds, and record groups; it adds `drawer_marker` and title-only `drawer_bullet` spans. Grammar 29 admits [requirement bullets](#requirement-bullets) with `req_marker` spans and the `req_in_drawer`, `req_parent`, `req_state`, and `req_depth` refusals. Grammar 28 claims whole-draft `//query` as Go To Notes. Grammar 19
 refuses an operator-only first-line body after an existing-task link start,
 teaching a glued later-start `+` for a single `++[N]` operator. Grammar 18
 treats trailing `+` after a bare start name as later-start timing (`=fix2+`,

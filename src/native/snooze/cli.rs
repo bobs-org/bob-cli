@@ -421,7 +421,12 @@ fn add(
     let _lock = match shell::acquire(LOCK_TIMEOUT) {
         Ok(lock) => lock,
         Err(LockOutcome::Deferred) => {
-            return Ok(deferred_action(&initial_day, &initial_now));
+            return Ok(deferred_add_report(
+                &initial,
+                &initial_day,
+                &initial_now,
+                &plan_config,
+            ));
         }
         Err(LockOutcome::Failed(message)) => {
             return Err(CliError::runtime(message));
@@ -436,7 +441,7 @@ fn add(
             || day.absolute != initial_day.absolute
             || day.relative != initial_day.relative
         {
-            return Ok(deferred_action(&day, &now));
+            return Ok(deferred_add_report(&initial, &day, &now, &plan_config));
         }
         ensure_today(&day, &now)?;
         let plan = add_plan(
@@ -454,7 +459,12 @@ fn add(
             }
             Err(InstallError::Changed) if attempt == 0 => continue,
             Err(InstallError::Changed) => {
-                return Ok(deferred_action(&day, &now));
+                return Ok(deferred_add_report(
+                    &plan,
+                    &day,
+                    &now,
+                    &plan_config,
+                ));
             }
             Err(InstallError::Failed(message)) => {
                 return Err(CliError::runtime(message));
@@ -477,7 +487,7 @@ fn drop_task(request: &Request, locator_text: &str) -> Result<Value, CliError> {
     let _lock = match shell::acquire(LOCK_TIMEOUT) {
         Ok(lock) => lock,
         Err(LockOutcome::Deferred) => {
-            return Ok(deferred_action(&initial_day, &initial_now));
+            return Ok(deferred_drop_report(&initial_day, &initial_now));
         }
         Err(LockOutcome::Failed(message)) => {
             return Err(CliError::runtime(message));
@@ -491,7 +501,7 @@ fn drop_task(request: &Request, locator_text: &str) -> Result<Value, CliError> {
             || day.absolute != initial_day.absolute
             || day.relative != initial_day.relative
         {
-            return Ok(deferred_action(&day, &now));
+            return Ok(deferred_drop_report(&day, &now));
         }
         ensure_today(&day, &now)?;
         let plan = drop_plan(&snapshot, &day, locator_text)?;
@@ -503,7 +513,7 @@ fn drop_task(request: &Request, locator_text: &str) -> Result<Value, CliError> {
             Ok(()) => return Ok(drop_report(&day, &now, false)),
             Err(InstallError::Changed) if attempt == 0 => continue,
             Err(InstallError::Changed) => {
-                return Ok(deferred_action(&day, &now));
+                return Ok(deferred_drop_report(&day, &now));
             }
             Err(InstallError::Failed(message)) => {
                 return Err(CliError::runtime(message));
@@ -1353,8 +1363,21 @@ fn drop_report(day: &Day, now: &ClockNow, dry_run: bool) -> Value {
     json!({"schema_version":SCHEMA_VERSION,"date":now.clock.date.to_string(),"now":now.rfc3339,"status":if dry_run {"planned"} else {"dropped"},"daily_file":day.relative,"dry_run":dry_run})
 }
 
-fn deferred_action(day: &Day, now: &ClockNow) -> Value {
-    json!({"schema_version":SCHEMA_VERSION,"date":now.clock.date.to_string(),"now":now.rfc3339,"status":"deferred","daily_file":day.relative,"notified":"none","wake_id":Value::Null})
+fn deferred_add_report(
+    plan: &AddPlanResult,
+    day: &Day,
+    now: &ClockNow,
+    config: &PlanConfig,
+) -> Value {
+    let mut report = add_report(plan, day, now, config, false);
+    report["status"] = json!("deferred");
+    report
+}
+
+fn deferred_drop_report(day: &Day, now: &ClockNow) -> Value {
+    let mut report = drop_report(day, now, false);
+    report["status"] = json!("deferred");
+    report
 }
 
 fn load_notify_mode() -> Result<NotifyMode, CliError> {
@@ -1847,6 +1870,103 @@ mod tests {
         assert!(fs::read_to_string(task).unwrap().contains("[*]"));
     }
 
+    fn assert_deferred_add_shape(result: &Value) {
+        assert_eq!(result["status"], "deferred");
+        for key in [
+            "schema_version",
+            "date",
+            "now",
+            "task",
+            "target",
+            "lane",
+            "daily_file",
+            "plan",
+            "dry_run",
+        ] {
+            assert!(
+                result.get(key).is_some(),
+                "deferred add misses {key}: {result}"
+            );
+        }
+        assert_eq!(result["dry_run"], false);
+        assert_eq!(
+            result["task"]["title"], "Review the launch plan",
+            "deferred add keeps the planned task: {result}"
+        );
+        assert_eq!(
+            result["target"]["time"], "15:30",
+            "deferred add keeps the planned target: {result}"
+        );
+        for key in [
+            "woken",
+            "dropped",
+            "ignored",
+            "pending",
+            "next_wake_at",
+            "notified",
+            "wake_id",
+        ] {
+            assert!(
+                result.get(key).is_none(),
+                "deferred add leaks wake-only {key}: {result}"
+            );
+        }
+    }
+
+    fn assert_deferred_drop_shape(result: &Value) {
+        assert_eq!(result["status"], "deferred");
+        for key in ["schema_version", "date", "now", "daily_file", "dry_run"] {
+            assert!(
+                result.get(key).is_some(),
+                "deferred drop misses {key}: {result}"
+            );
+        }
+        assert_eq!(result["dry_run"], false);
+        for key in [
+            "task",
+            "target",
+            "lane",
+            "plan",
+            "woken",
+            "dropped",
+            "ignored",
+            "pending",
+            "next_wake_at",
+            "notified",
+            "wake_id",
+        ] {
+            assert!(
+                result.get(key).is_none(),
+                "deferred drop leaks {key}: {result}"
+            );
+        }
+    }
+
+    fn assert_deferred_wake_shape(result: &Value) {
+        assert_eq!(result["status"], "deferred");
+        for key in [
+            "schema_version",
+            "date",
+            "now",
+            "woken",
+            "dropped",
+            "ignored",
+            "pending",
+            "next_wake_at",
+            "plan",
+            "daily_file",
+            "notified",
+            "wake_id",
+        ] {
+            assert!(
+                result.get(key).is_some(),
+                "deferred wake misses {key}: {result}"
+            );
+        }
+        assert_eq!(result["notified"], "none");
+        assert!(result["wake_id"].is_null());
+    }
+
     #[test]
     fn add_defers_after_a_second_preimage_drift_without_partial_write() {
         let (temp, root, day, task) = add_fixture();
@@ -1865,7 +1985,7 @@ mod tests {
 
         let result = add(&add_request(&root), "jobs:job", "15:30")
             .expect("second drift defers");
-        assert_eq!(result["status"], "deferred");
+        assert_deferred_add_shape(&result);
         assert_eq!(fs::read_to_string(day).unwrap(), DAY_BEFORE);
         assert_eq!(fs::read_to_string(task).unwrap(), TASK_BEFORE);
     }
@@ -1881,9 +2001,64 @@ mod tests {
 
         let result = add(&add_request(&root), "jobs:job", "15:30")
             .expect("rollover defers");
-        assert_eq!(result["status"], "deferred");
+        assert_deferred_add_shape(&result);
+        assert_eq!(result["date"], "2026-10-09");
+        assert_eq!(result["daily_file"], "2026/20261008.md");
         assert_eq!(fs::read_to_string(day).unwrap(), DAY_BEFORE);
         assert_eq!(fs::read_to_string(task).unwrap(), TASK_BEFORE);
+    }
+
+    #[test]
+    fn drop_defers_when_the_day_rolls_over_before_write() {
+        let (temp, root, day, task) = add_fixture();
+        let _env = add_env(&root, &temp, &day);
+        let added =
+            add(&add_request(&root), "jobs:job", "15:30").expect("add a row");
+        assert_eq!(added["status"], "added");
+        let task_after_add = fs::read_to_string(&task).expect("task");
+        set_test_clock_sequence([
+            date("2026-10-08T12:00:00"),
+            date("2026-10-09T00:00:01"),
+        ]);
+
+        let result = drop_task(&add_request(&root), "jobs:job")
+            .expect("rollover defers");
+        assert_deferred_drop_shape(&result);
+        assert_eq!(result["date"], "2026-10-09");
+        assert_eq!(result["daily_file"], "2026/20261008.md");
+        assert!(
+            fs::read_to_string(&day).unwrap().contains("- **1530**"),
+            "deferred drop writes nothing"
+        );
+        assert_eq!(fs::read_to_string(task).unwrap(), task_after_add);
+    }
+
+    #[test]
+    fn wake_defers_when_the_day_rolls_over_before_write() {
+        const DAY_DUE: &str = "# 2026-10-08\n\n## Pomodoros\n\n## Snoozed\n\n- **1100** [[jobs#^job]]\n\n## Tasks\n";
+        const TASK_NEXT: &str = "- [*] #task Review the launch plan ^job\n";
+        let (temp, root, day, task) = add_fixture();
+        fs::write(&day, DAY_DUE).expect("due row");
+        fs::write(&task, TASK_NEXT).expect("next task");
+        let _env = add_env(&root, &temp, &day);
+        set_test_clock_sequence([
+            date("2026-10-08T12:00:00"),
+            date("2026-10-09T00:00:01"),
+        ]);
+
+        let result = wake(&add_request(&root), &["jobs:job".to_string()])
+            .expect("rollover defers");
+        assert_deferred_wake_shape(&result);
+        assert_eq!(result["date"], "2026-10-09");
+        assert_eq!(result["daily_file"], "2026/20261008.md");
+        assert_eq!(
+            result["woken"].as_array().map(Vec::len),
+            Some(1),
+            "deferred wake keeps the pre-lock evaluation: {result}"
+        );
+        assert_eq!(result["woken"][0]["title"], "Review the launch plan");
+        assert_eq!(fs::read_to_string(&day).unwrap(), DAY_DUE);
+        assert_eq!(fs::read_to_string(task).unwrap(), TASK_NEXT);
     }
 
     #[test]

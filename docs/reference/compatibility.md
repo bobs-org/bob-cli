@@ -68,9 +68,14 @@ Old top-level spellings remain as hidden aliases. See
 ## Capture-language revision
 
 `capture-parse` and `capture-complete` keep `schema_version: 1` and report the
-additive top-level `grammar: 32` revision. Clients can use it to distinguish
+additive top-level `grammar: 34` revision. Clients can use it to distinguish
 capture-language updates while continuing to read the same versioned JSON
-envelope. Grammar 32 retires ALL-CAPS drawer structure: plain uppercase content remains ordinary, and editor parsing may add the nonblocking `caps_drawer_retired` warning when a nested plain bullet matches a known drawer key. Grammar 31 claims a whole-draft `@route^id` as mode `task_goto` with an additive `goto` payload (found, missing_note, missing_block_id, or duplicate_block_id); previously the same draft was a complete empty-body `task` that execution refused as missing text. Grammar 30 admits whole-bold container drafts for task drawers, project-note sections, `%n` notebook seeds, and record groups; adds `drawer_marker` and title-only `drawer_bullet` spans. Grammar 29 admits requirement bullets: checkbox bullets under a task
+envelope. Grammar 34 admits authored child bullets under a note-less
+existing-task link (`@route:id` or `^route:id`) as task notes, drawers, and
+requirements; link closes keep refusing children. Grammar 33 adds the
+terminal `z:<when>` task snooze marker and the narrow `@route:id!`
+snooze-drop spelling (previously literal task text or a block-ID refusal).
+Grammar 32 retires ALL-CAPS drawer structure: plain uppercase content remains ordinary, and editor parsing may add the nonblocking `caps_drawer_retired` warning when a nested plain bullet matches a known drawer key. Grammar 31 claims a whole-draft `@route^id` as mode `task_goto` with an additive `goto` payload (found, missing_note, missing_block_id, or duplicate_block_id); previously the same draft was a complete empty-body `task` that execution refused as missing text. Grammar 30 admits whole-bold container drafts for task drawers, project-note sections, `%n` notebook seeds, and record groups; adds `drawer_marker` and title-only `drawer_bullet` spans. Grammar 29 admits requirement bullets: checkbox bullets under a task
 or requirement are requirements, nest beyond two levels beneath requirement
 chains, report `req_marker` spans with an additive `depth`, and refuse
 `req_in_drawer`, `req_parent`, `req_state`, and `req_depth`. Grammar 28 claims whole-draft `//query` as `note_goto` (previously
